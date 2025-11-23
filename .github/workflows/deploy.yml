@@ -33,7 +33,7 @@ jobs:
         run: npm install
 
       - name: Build React app
-        working-directory: Frontendict
+        working-directory: Frontend/ict
         run: npm run build
 
       - name: Upload build artifact
