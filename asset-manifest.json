@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/css/main.baa8c1f2.css",
+    "main.js": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/js/main.e05acac8.js",
+    "static/js/453.f183338e.chunk.js": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/js/453.f183338e.chunk.js",
+    "index.html": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/index.html",
+    "main.baa8c1f2.css.map": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/css/main.baa8c1f2.css.map",
+    "main.e05acac8.js.map": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/js/main.e05acac8.js.map",
+    "453.f183338e.chunk.js.map": "/agentggg/ICT-DayTrade/tree/main/Frontend/ict/static/js/453.f183338e.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.baa8c1f2.css",
+    "static/js/main.e05acac8.js"
+  ]
+}
