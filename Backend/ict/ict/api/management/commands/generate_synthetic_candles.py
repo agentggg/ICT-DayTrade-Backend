@@ -1,129 +1,122 @@
-# ict/management/commands/generate_synthetic_candles.py
 import random
 from datetime import timedelta
-
 from django.core.management.base import BaseCommand
 from django.utils import timezone
+from ...models import Candle, Instrument
 
-from ...models import Instrument, Candle  # adjust if your app is named differently
 
-
-SYMBOLS = [
-    "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
-    "META", "NFLX", "NVDA", "AMD", "INTC",
-    "SPY", "QQQ", "IWM", "NQ100", "ES500",
-    "US30", "GC", "CL", "EURUSD", "GBPUSD",
+TIMEFRAMES = [
+    ("1m", 1),
+    ("3m", 3),
+    ("5m", 5),
+    ("15m", 15),
 ]
 
 
 class Command(BaseCommand):
-    help = "Generate synthetic ICT-style intraday candles for multiple instruments"
+    help = "Generate synthetic ICT-style candles with realistic volatility"
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--candles-per-symbol",
+            "--candles_per_symbol",
             type=int,
             default=500,
-            help="Number of candles per symbol (default: 500)",
-        )
-        parser.add_argument(
-            "--timeframe",
-            type=str,
-            default="5m",
-            help="Timeframe label (default: 5m)",
+            help="How many candles per symbol"
         )
 
     def handle(self, *args, **options):
         candles_per_symbol = options["candles_per_symbol"]
-        timeframe = options["timeframe"]
 
-        total_target = len(SYMBOLS) * candles_per_symbol
         self.stdout.write(self.style.NOTICE(
-            f"Generating ~{total_target} candles for {len(SYMBOLS)} symbols..."
+            f"Generating {candles_per_symbol} candles PER SYMBOL with mixed timeframes..."
         ))
 
-        for symbol in SYMBOLS:
-            instrument, _ = Instrument.objects.get_or_create(
-                symbol=symbol,
-                defaults={"name": symbol},
-            )
+        symbols = [
+            "AAPL", "MSFT", "GOOG", "AMZN", "TSLA",
+            "META", "NFLX", "NVDA", "AMD", "INTC",
+            "SPY", "QQQ", "IWM", "NQ100", "ES500",
+            "US30", "GC", "CL", "EURUSD", "GBPUSD"
+        ]
 
-            self._generate_for_symbol(instrument, candles_per_symbol, timeframe)
+        for sym in symbols:
+            inst, _ = Instrument.objects.get_or_create(symbol=sym, defaults={"name": sym})
+            self._generate_for_symbol(inst, candles_per_symbol)
 
         self.stdout.write(self.style.SUCCESS("Done generating synthetic candles."))
 
-    def _generate_for_symbol(self, instrument, n, timeframe):
-        """
-        Generate n synthetic candles for a single instrument.
-        We use a random walk with:
-        - Volatility regimes
-        - Occasional displacement candles (ICT-style)
-        - Wicks for liquidity grabs
-        """
-        # Start some time in the past (e.g. n * 5min ago)
-        minutes_per_candle = 5  # since timeframe default is '5m'
+    # ------------------------------------------------------------------
+    #              REALISTIC ICT-STYLE CANDLE GENERATOR
+    # ------------------------------------------------------------------
+    def _generate_for_symbol(self, instrument, n):
+        timeframe, minutes_per_candle = random.choice(TIMEFRAMES)
+
         end_time = timezone.now()
         start_time = end_time - timedelta(minutes=minutes_per_candle * n)
 
-        # Choose a base price per symbol to make them different
-        base_price = random.uniform(20, 300)
+        # Base price per symbol – realistic + unique
+        base_price = random.uniform(60, 180)
         price = base_price
-
-        # Base volatility (how big each candle usually is)
-        base_vol = random.uniform(0.2, 1.5)
 
         candles = []
         current_time = start_time
 
+        # Volatility (percent of price)
+        small_vol_min = 0.0005  # 0.05%
+        small_vol_max = 0.0025  # 0.25%
+
+        big_vol_min = 0.004     # 0.4%
+        big_vol_max = 0.012     # 1.2%
+
         for i in range(n):
-            # Volatility regime: every 40 candles, do a "session push"
-            session_factor = 1.0
-            if i % 40 in (0, 1, 2, 3, 4):
-                session_factor = 2.0  # displacement phase
+            # Default small volatility
+            vol_pct = random.uniform(small_vol_min, small_vol_max)
 
-            # Random walk for close
-            change = random.gauss(0, base_vol * session_factor)
+            # Every ~40 candles → session push
+            if i % 40 in (0, 1, 2, 3):
+                vol_pct = random.uniform(big_vol_min, big_vol_max)
+
+            # ICT displacement candle
+            is_displacement = (i % 60 == 0)
+
+            direction = 1 if random.random() < 0.5 else -1
+
             o = price
-            c = price + change
 
-            # Basic high/low around open/close
-            true_range = abs(change) + base_vol * session_factor
-            h = max(o, c) + true_range * random.uniform(0.2, 0.8)
-            l = min(o, c) - true_range * random.uniform(0.2, 0.8)
+            if is_displacement:
+                move_pct = vol_pct * random.uniform(3.0, 5.0)
+            else:
+                move_pct = vol_pct * random.uniform(0.5, 1.5)
 
-            # ICT-ish tweaks:
-            # - Every 25th candle, create a big wick (liquidity grab)
-            # - Every 30th candle, create a strong body (displacement candle)
+            c = o * (1 + direction * move_pct)
+
+            # Wicks
+            wick_pct = vol_pct * random.uniform(0.3, 1.0)
+            h = max(o, c) * (1 + wick_pct)
+            l = min(o, c) * (1 - wick_pct)
+
+            # Liquidity grab wicks every 25 candles
             if i % 25 == 0:
-                # stop run up or down
+                liq_pct = vol_pct * random.uniform(2.0, 4.0)
                 if random.random() < 0.5:
-                    h += true_range * 2.5  # big upper wick
+                    h = max(h, max(o, c) * (1 + liq_pct))
                 else:
-                    l -= true_range * 2.5  # big lower wick
+                    l = min(l, min(o, c) * (1 - liq_pct))
 
-            if i % 30 == 0:
-                # displacement body (FVG-like conditions)
-                big_move = base_vol * session_factor * 4
-                direction = 1 if random.random() < 0.5 else -1
-                c = o + direction * big_move
-                h = max(h, o, c)
-                l = min(l, o, c)
-
-            # Volume with some spikes
-            vol_base = random.randint(1000, 20000)
+            # Volume
+            vol = random.randint(5_000, 50_000)
             if i % 35 in (0, 1):
-                vol_base *= random.randint(2, 5)
+                vol *= random.randint(2, 4)
 
             candles.append(
                 Candle(
                     instrument=instrument,
                     timestamp=current_time,
                     timeframe=timeframe,
-                    open=round(o, 4),
-                    high=round(h, 4),
-                    low=round(l, 4),
-                    close=round(c, 4),
-                    volume=vol_base,
+                    _open=round(o, 2),
+                    high=round(h, 2),
+                    low=round(l, 2),
+                    close=round(c, 2),
+                    volume=vol,
                 )
             )
 
