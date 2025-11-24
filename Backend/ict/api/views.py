@@ -6,6 +6,8 @@ import json
 import logging
 import threading
 import re
+import pprint
+import copy
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import send_mail
@@ -52,10 +54,10 @@ def get_data(request):
 
 
 @api_view(['GET'])
-def fvg_data(request): 
+def get_candles(request): 
     instrument = request.GET.get('instrument')
     timeframe = request.GET.get('timeframe')
-
+    amount_of_candles = request.GET.get('amount')
     instrument_obj = Instrument.objects.get(name=instrument)
 
     candles = Candle.objects.filter(
@@ -67,20 +69,23 @@ def fvg_data(request):
     data = CandleSerializers(candles, many=True).data
 
     # Create sliding 3-candle windows
-    three_sets = []
-    for i in range(len(data) - 2):
-        c1 = data[i]
-        c2 = data[i+1]
-        c3 = data[i+2]
-        three_sets.append([c1, c2, c3])
+    candle_set = []
+    # pprint(f"==>> candle_set: {candle_set}")
+    temp_array = []
+    for i in data:
+        if len(temp_array) == int(amount_of_candles):
+            candle_set.append(copy.deepcopy(temp_array))
+            temp_array.clear()
+        else:
+            temp_array.append(i)
 
-    if not three_sets:
+    if not candle_set:
         return Response({"error": "Not enough candles"}, status=400)
 
     # choose random valid index
-    random_index = random.randint(0, len(three_sets) - 1)
+    random_index = random.randint(0, len(candle_set) - 1)
 
-    selected = three_sets[random_index]
+    selected = candle_set[random_index]
 
     return Response(selected)
 
@@ -138,26 +143,55 @@ def check_fvg(request):
         }
     )
 
-@api_view(['POST'])
+@api_view(["POST"])
 def check_order_block(request):
-    direction = request.data.get("direction")  # "bullish" or "bearish"
+    """
+    Accepts a list of candles (e.g. 13) and returns any detected order blocks.
+    Request payload:
+      { "direction": "bullish"|"bearish", "candles": [...], "require_displacement": true, "min_body_ratio": 0.2 }
+    Response:
+      { "ok": bool, "matches": [ {ob_index, trigger_index, ob, trigger, direction}, ... ], "reason": optional }
+    """
+    direction = request.data.get("direction")
     candles = request.data.get("candles", [])
     require_displacement = request.data.get("require_displacement", True)
+    min_body_ratio = request.data.get("min_body_ratio", 0.20)
 
-    if len(candles) < 2:
-        return Response({"ok": False, "reason": "need at least 2 candles"})
+    if not isinstance(candles, list) or len(candles) < 2:
+        return Response({"ok": False, "matches": [], "reason": "need at least 2 candles"})
 
-    # last two candles only
-    c0 = candles[-2]
-    c1 = candles[-1]
+    if direction not in ("bullish", "bearish"):
+        return Response({"ok": False, "matches": [], "reason": "invalid direction"})
+
+    matches = find_order_blocks(
+        candles,
+        direction=direction,
+        require_displacement=require_displacement,
+        min_body_ratio=min_body_ratio,
+    )
+
+    if not matches:
+        return Response({"ok": False, "matches": [], "reason": "no order block found"})
+
+    return Response({"ok": True, "matches": matches})
+
+@api_view(["POST"])
+def check_breaker_block(request):
+    direction = request.data.get("direction")  # "bullish" or "bearish"
+    candles = request.data.get("candles", [])
+
+    if not isinstance(candles, list) or len(candles) < 5:
+        return Response({"ok": False, "reason": "need at least 5 candles"}, status=400)
+
+    # You said you'll send 12; just in case, we only look at the last 12
+    candles = candles[-12:]
 
     if direction == "bullish":
-        ok = is_bullish_order_block(c0, c1, require_displacement=require_displacement)
-
+        ok, info = is_bullish_breaker(candles)
     elif direction == "bearish":
-        ok = is_bearish_order_block(c0, c1, require_displacement=require_displacement)
-
+        ok, info = is_bearish_breaker(candles)
     else:
-        return Response({"ok": False, "reason": "invalid direction"})
+        return Response({"ok": False, "reason": "invalid direction"}, status=400)
 
-    return Response({"ok": ok})
+    return Response({"ok": ok, "info": info})
+
