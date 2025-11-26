@@ -8,5 +8,8 @@ urlpatterns = [
     path('check_fvg/', check_fvg, name='check_fvg'),
     path('check_order_block/', check_order_block, name='check_order_block'),
     path('check_breaker_block/', check_breaker_block, name='check_breaker_block'),
+    path('login_verification/', login_verification, name='login_verification'),
+    path("trades", trade_journal_view, name="trade-journal"),
+
 ]
      
