@@ -292,10 +292,25 @@ def trade_journal_view(request):
         serializer = TradeJournalSerializer(trade)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+<<<<<<< HEAD
     # Get all 
     # user = asdsd
     
     trades = TradeJournal.objects.all().order_by("-date", "-time")
+=======
+    # Get all
+    user = request.GET.get("username")
+
+    if not user:
+        return Response({"detail": "Username is required."}, status=400)
+
+    try:
+        userInstance = CustomUser.objects.get(username=user)
+    except CustomUser.DoesNotExist:
+        return Response({"detail": "User not found."}, status=404)
+
+    trades = TradeJournal.objects.filter(username=userInstance).order_by("-date", "-time")
+>>>>>>> 760382ccde8258f3a90eda99881cbaecf49ca73b
     serializer = TradeJournalSerializer(trades, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
