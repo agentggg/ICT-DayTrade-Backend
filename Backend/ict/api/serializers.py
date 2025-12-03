@@ -30,7 +30,13 @@ class CandleSerializers(serializers.ModelSerializer):
     class Meta:
         model = Candle
         fields = "__all__"
-        
+
+# Serializer for Flashcard model
+class FlashCardSerializers(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Flashcard
+        fields = "__all__" 
 
 
 class TradeJournalSerializer(serializers.ModelSerializer):

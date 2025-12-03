@@ -174,6 +174,14 @@ class TradeJournal(models.Model):
     def __str__(self):
         return f"Trade #{self.pk} {self.symbol} {self.direction} {self.date}"
 
+class Flashcard(models.Model):
+    question = models.TextField()
+    answer = models.TextField()
+    reasoning = models.TextField()
+    course = models.TextField()
+
+    def __str__(self):
+        return f"{self.course} - {self.question}"
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_auth_token(sender, instance=None, created=False, **kwargs):

@@ -10,6 +10,8 @@ urlpatterns = [
     path('check_breaker_block/', check_breaker_block, name='check_breaker_block'),
     path('login_verification/', login_verification, name='login_verification'),
     path("trades", trade_journal_view, name="trade-journal"),
+    path("flashcard", flashcard, name="flashcard"),
+    path("get_flashcard", get_flashcard, name="get_flashcard"),
 
 ]
      

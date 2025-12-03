@@ -210,18 +210,15 @@ def login_verification(request):
     try:
         # Initialize your serializer with the request data
         serializer = ObtainAuthToken.serializer_class(data=request.data, context={'request': request})
-        print(f"==>> serializer: {serializer}")
 
         # Validate the data. If it's not valid, a ValidationError will be raised
         serializer.is_valid(raise_exception=True)
 
         # Get the user from the validated data
         user = serializer.validated_data['user']
-        print(f"==>> user: {user}")
 
         # Fetch profile access roles. This assumes the user model has a related 'profile_access' field
         profile_access_roles = user.profile_access.all().values_list('name', flat=True)
-        print(f"==>> profile_access_roles: {profile_access_roles}")
 
         # Attempt to get or create the auth token for the user
         token, created = Token.objects.get_or_create(user=user)
@@ -260,10 +257,10 @@ def trade_journal_view(request):
     """
     POST /api/trades/
         - Create/save a trade
-
+           
     GET /api/trades/
         - Get all trades
-
+    
     GET /api/trades/?trade_id=1
         - Get a single trade by internal ID (pk)
 
@@ -295,13 +292,31 @@ def trade_journal_view(request):
         serializer = TradeJournalSerializer(trade)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # Get all
+    # Get all 
+    # user = asdsd
+    
     trades = TradeJournal.objects.all().order_by("-date", "-time")
     serializer = TradeJournalSerializer(trades, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
+@api_view(["GET", "POST"])
+def flashcard(request):
+    # CREATE
+    if request.method == "GET":
+        serializer = FlashCardSerializers(data=request.data)
+        if serializer.is_valid():            
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET']) 
+def get_flashcard(request): 
+    course = request.GET.get('course', False)
+    cards = Flashcard.objects.filter(course=course)
+    response = FlashCardSerializers(cards, many=True).data    
+    return Response(response) 
     """
-    {
+    { 
   "date": "2025-11-25",
   "time": "09:59",
   "symbol": "MNQ",
