@@ -28,7 +28,6 @@ pyparsing==3.2.5
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 requests==2.32.5
-scipy==1.13.1
 six==1.17.0
 sqlparse==0.5.3
 sympy==1.14.0
