@@ -1,4 +1,6 @@
+
 gunicorn==21.2.0
+corsheaders
 asgiref==3.11.0
 certifi==2025.11.12
 charset-normalizer==3.4.4
