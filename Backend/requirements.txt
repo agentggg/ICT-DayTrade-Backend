@@ -41,5 +41,5 @@ zipp==3.23.0
 pip>=25.0
 setuptools>=70.0
 wheel
-numpy<2.0
-scipy==1.11.4
+numpy>=2.0,<2.3
+scipy>=1.13.0,<1.14
