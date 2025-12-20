@@ -292,12 +292,7 @@ def trade_journal_view(request):
         serializer = TradeJournalSerializer(trade)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-<<<<<<< HEAD
-    # Get all 
-    # user = asdsd
-    
-    trades = TradeJournal.objects.all().order_by("-date", "-time")
-=======
+
     # Get all
     user = request.GET.get("username")
 
@@ -310,7 +305,6 @@ def trade_journal_view(request):
         return Response({"detail": "User not found."}, status=404)
 
     trades = TradeJournal.objects.filter(username=userInstance).order_by("-date", "-time")
->>>>>>> 760382ccde8258f3a90eda99881cbaecf49ca73b
     serializer = TradeJournalSerializer(trades, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -331,87 +325,153 @@ def get_flashcard(request):
     response = FlashCardSerializers(cards, many=True).data    
     return Response(response) 
     """
-    { 
-  "date": "2025-11-25",
-  "time": "09:59",
-  "symbol": "MNQ",
-  "direction": "long",
-  "session": "newyork",
-  "timeframe": "1m",
-  "risk_percent": 0.5,
-  "entry_price": 24816.75,
-  "exit_price": 24855.25,
-  "result": "win",
-  "pnl": 77.0,
-  "r_multiple": 3.0,
-  "ict_setup": "IFVG reversal after MSS",
-  "higher_tf_bias": "4H",
-  "ifvg_used": true,
-  "ob_used": false,
-  "breaker_used": false,
-  "liquidity_sweep_used": true,
-  "mitigation_block_used": false,
-  "pre_trade_emotion": "calm",
-  "post_trade_emotion": "satisfied",
-  "trade_grade": "A",
-  "followed_plan": true,
-  "emotional_trade": false,
-  "took_profit_early": false,
-  "missed_trade": false,
-  "moved_stop_loss": false,
-  "revenge_trade": false,
-  "notes": "TopstepX copy output: Trade ID 1692251887, size 1 contract(s) on MNQ, entered around \"November 25 2025 @ 9:59:53 am\", exited around \"November 25 2025 @ 11:45:17 am\", entry price 24,816.75, exit price 24,855.25, realized PnL $77.00, commissions $0, extra metric $-0.74.",
-  "stop_levels": [
-    {
-      "price": 24800.0,
-      "reason": "Initial SL below 1m OB low."
-    },
-    {
-      "price": 24820.0,
-      "reason": "Moved SL to BE+ after price reached 1R."
-    }
-  ],
-  "take_profit_levels": [
-    {
-      "price": 24860.0,
-      "reason": "First partial at intraday swing high."
-    },
-    {
-      "price": 24900.0,
-      "reason": "Final TP at HTF premium level."
-    }
-  ]
-}
-    """
-    """
-1692251887
-/MNQ
-1
-November 25 2025 @ 9:59:53 am
-November 25 2025 @ 11:45:17 am
-01:45:23
-24,816.75
-24,855.25
-$77.00
-$0
-$-0.74
-Long
+        { 
+        "date": "2025-11-25",
+        "time": "09:59",
+        "symbol": "MNQ",
+        "direction": "long",
+        "session": "newyork",
+        "timeframe": "1m",
+        "risk_percent": 0.5,
+        "entry_price": 24816.75,
+        "exit_price": 24855.25,
+        "result": "win",
+        "pnl": 77.0,
+        "r_multiple": 3.0,
+        "ict_setup": "IFVG reversal after MSS",
+        "higher_tf_bias": "4H",
+        "ifvg_used": true,
+        "ob_used": false,
+        "breaker_used": false,
+        "liquidity_sweep_used": true,
+        "mitigation_block_used": false,
+        "pre_trade_emotion": "calm",
+        "post_trade_emotion": "satisfied",
+        "trade_grade": "A",
+        "followed_plan": true,
+        "emotional_trade": false,
+        "took_profit_early": false,
+        "missed_trade": false,
+        "moved_stop_loss": false,
+        "revenge_trade": false,
+        "notes": "TopstepX copy output: Trade ID 1692251887, size 1 contract(s) on MNQ, entered around \"November 25 2025 @ 9:59:53 am\", exited around \"November 25 2025 @ 11:45:17 am\", entry price 24,816.75, exit price 24,855.25, realized PnL $77.00, commissions $0, extra metric $-0.74.",
+        "stop_levels": [
+            {
+            "price": 24800.0,
+            "reason": "Initial SL below 1m OB low."
+            },
+            {
+            "price": 24820.0,
+            "reason": "Moved SL to BE+ after price reached 1R."
+            }
+        ],
+        "take_profit_levels": [
+            {
+            "price": 24860.0,
+            "reason": "First partial at intraday swing high."
+            },
+            {
+            "price": 24900.0,
+            "reason": "Final TP at HTF premium level."
+            }
+        ]
+        }
+
+        1692251887
+        /MNQ
+        1
+        November 25 2025 @ 9:59:53 am
+        November 25 2025 @ 11:45:17 am
+        01:45:23
+        24,816.75
+        24,855.25
+        $77.00
+        $0
+        $-0.74
+        Long
+
+            {
+        "date": "2025-11-26",
+        "time": "09:30",
+        "symbol": "MNQ",
+        "timeframe": "1m",
+        "ict_setup": "Breaker Block Model (BB)",
+        "session": "newyork",
+        "outcome": "failed",
+        "what_happened": "BB formed after sweep but price failed to respect the block and traded through.",
+        "why_outcome": "I forced a BB in counter HTF direction; HTF liquidity was actually above, so the move continued higher.",
+        "notes": "Need to require MSS on 5m in direction of BB before taking 1m entries.",
+        "strategy_modification": true,
+        "modification_details": "Only trade BB if 5m market structure and liquidity profile confirms direction and there's a clear external range.",
+        "screenshot_link": "https://www.tradingview.com/x/your-chart-id/"
+        }
     """
 
-    """
-    {
-  "date": "2025-11-26",
-  "time": "09:30",
-  "symbol": "MNQ",
-  "timeframe": "1m",
-  "ict_setup": "Breaker Block Model (BB)",
-  "session": "newyork",
-  "outcome": "failed",
-  "what_happened": "BB formed after sweep but price failed to respect the block and traded through.",
-  "why_outcome": "I forced a BB in counter HTF direction; HTF liquidity was actually above, so the move continued higher.",
-  "notes": "Need to require MSS on 5m in direction of BB before taking 1m entries.",
-  "strategy_modification": true,
-  "modification_details": "Only trade BB if 5m market structure and liquidity profile confirms direction and there's a clear external range.",
-  "screenshot_link": "https://www.tradingview.com/x/your-chart-id/"
-}
-    """
+
+import io
+import threading
+from PIL import Image
+import numpy as np
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from ultralytics import YOLO
+
+# ---------
+# Load model once (process-level singleton)
+# ---------
+_model = None
+_model_lock = threading.Lock()
+
+def get_model():
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                _model = YOLO("yolov8x.pt")  # or yolov8s.pt, etc.
+    return _model
+
+
+@csrf_exempt  # simplest for local dev; see CSRF notes below for production
+def predict(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "POST only"}, status=405)
+
+    if "image" not in request.FILES:
+        return JsonResponse({"error": "Missing file field 'image'."}, status=400)
+
+    # Confidence threshold
+    try:
+        conf = float(request.POST.get("conf", "0.25"))
+    except ValueError:
+        conf = 0.15
+
+    # Read uploaded image into numpy array (RGB)
+    uploaded = request.FILES["image"].read()
+    img = Image.open(io.BytesIO(uploaded)).convert("RGB")
+    frame = np.array(img)  # shape: (H, W, 3) RGB
+    model = get_model()
+
+    # Run inference (no saving)
+    results = model.predict(
+        frame,
+        conf=conf,
+        iou=0.5,
+        max_det=300,
+        imgsz=960,
+        verbose=False
+    )
+    r = results[0]
+    detections = []
+    if r.boxes is not None and len(r.boxes) > 0:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            detections.append({
+                "class_id": cls_id,
+                "class_name": model.names.get(cls_id, str(cls_id)),
+                "confidence": float(box.conf[0]),
+                "bbox_xyxy": [float(x) for x in box.xyxy[0].tolist()],  # [x1,y1,x2,y2]
+            })
+
+    return JsonResponse({"detections": detections})

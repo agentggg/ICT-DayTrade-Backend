@@ -12,6 +12,7 @@ urlpatterns = [
     path("trades", trade_journal_view, name="trade-journal"),
     path("flashcard", flashcard, name="flashcard"),
     path("get_flashcard", get_flashcard, name="get_flashcard"),
+    path("predict/", predict, name="predict"),
 
 ]
      
