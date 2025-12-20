@@ -61,6 +61,9 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'ict.urls'
 CORS_ALLOW_ALL_ORIGINS = True
+
+# CORS_ALLOW_CREDENTIALS = True
+
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
