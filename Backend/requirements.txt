@@ -39,15 +39,8 @@ ultralytics==8.3.240
 ultralytics-thop==2.0.18
 urllib3==2.5.0
 zipp==3.23.0
-
-
-
 pip>=25.0
 setuptools>=70.0
 wheel
-
 numpy<2.0
 scipy==1.11.4
-
-
-
