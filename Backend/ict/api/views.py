@@ -28,7 +28,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView
 from django.http import HttpResponse
 from django.conf import settings
-from django.views.decorators.csrf import csrf_exempt
 
 
  
@@ -37,6 +36,20 @@ from .serializers import *
 from .utils import *
 import requests
 from django.utils.html import escape
+
+
+import io
+from PIL import Image
+import numpy as np
+
+
+from ultralytics import YOLO
+
+# ---------
+# Load model once (process-level singleton)
+# ---------
+_model = None
+_model_lock = threading.Lock()
 
 @api_view(['GET', 'POST'])
 def test(request):
@@ -408,21 +421,7 @@ def get_flashcard(request):
     """
 
 
-import io
-import threading
-from PIL import Image
-import numpy as np
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-
-from ultralytics import YOLO
-
-# ---------
-# Load model once (process-level singleton)
-# ---------
-_model = None
-_model_lock = threading.Lock()
 
 def get_model():
     global _model
