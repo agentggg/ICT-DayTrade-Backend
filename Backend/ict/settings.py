@@ -63,7 +63,7 @@ ROOT_URLCONF = 'ict.urls'
 # CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = [
     "https://agentggg.github.io",
-    "https://2b934cb499af.ngrok-free.app",
+    "https://d2b462eb5d88.ngrok-free.app",
     "http://localhost:8000"
 ] 
  
