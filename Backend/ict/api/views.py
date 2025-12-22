@@ -41,15 +41,14 @@ from django.utils.html import escape
 import io
 from PIL import Image
 import numpy as np
-
+import os
+from django.utils.timezone import now
+import face_recognition
 
 from ultralytics import YOLO
+import cv2
 
-# ---------
-# Load model once (process-level singleton)
-# ---------
-_model = None
-_model_lock = threading.Lock()
+model = YOLO("yolov8n.pt") # Load model once (process-level singleton)
 
 @api_view(['GET', 'POST'])
 def test(request):
@@ -422,55 +421,310 @@ def get_flashcard(request):
 
 
 
-
-def get_model():
-    global _model
-    if _model is None:
-        with _model_lock:
-            if _model is None:
-                _model = YOLO("yolov8x.pt")  # or yolov8s.pt, etc.
-    return _model
-
-
 @csrf_exempt  # simplest for local dev; see CSRF notes below for production
 def predict(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
-
-    if "image" not in request.FILES:
-        return JsonResponse({"error": "Missing file field 'image'."}, status=400)
-
-    # Confidence threshold
-    try:
-        conf = float(request.POST.get("conf", "0.25"))
-    except ValueError:
-        conf = 0.15
-
-    # Read uploaded image into numpy array (RGB)
-    uploaded = request.FILES["image"].read()
-    img = Image.open(io.BytesIO(uploaded)).convert("RGB")
-    frame = np.array(img)  # shape: (H, W, 3) RGB
-    model = get_model()
-
-    # Run inference (no saving)
-    results = model.predict(
-        frame,
-        conf=conf,
-        iou=0.5,
-        max_det=300,
-        imgsz=960,
+    
+    _img = request.FILES.get('image', False)
+    if _img == False:
+        return JsonResponse({"error": "Image not processed"}, status=500)
+    pil_image = Image.open(io.BytesIO(_img.read()))
+    pil_image = pil_image.convert("RGB")
+    img = np.array(pil_image)
+    results = model(
+        source=img,
+        conf=0.25,
+        iou=0.7, # must stduy
+        imgsz=640,  # common imag size
+        verbose=False, # debug
+        save=False, # save the image
+        device="cpu", # option is GPU or CPU
+        # half=True,
+        half=False # true only works on GPU
+    )   
+    for box in r.boxes:
+        x1, y1, x2, y2 = box.xyxy[0]
+        conf = box.conf[0]
+        cls_id = int(box.cls[0])
+    """ 
+        source, 
+        conf=0.25, 
+        iou=0.7,
+        imgsz=640,
+        device="cpu",
         verbose=False
-    )
-    r = results[0]
-    detections = []
-    if r.boxes is not None and len(r.boxes) > 0:
-        for box in r.boxes:
-            cls_id = int(box.cls[0])
-            detections.append({
-                "class_id": cls_id,
-                "class_name": model.names.get(cls_id, str(cls_id)),
-                "confidence": float(box.conf[0]),
-                "bbox_xyxy": [float(x) for x in box.xyxy[0].tolist()],  # [x1,y1,x2,y2]
-            })
+    """  
+    return JsonResponse({"detections": "detections"})
+   
 
-    return JsonResponse({"detections": detections})
+
+
+
+class FacialRecognitionTool:
+    def __init__(self):
+        # Store known_faces under a predictable, server-safe directory
+        self.KNOWN_FACES_DIR = os.path.join(settings.BASE_DIR, "known_faces")
+
+        self.TOLERANCE = 0.50      # maximum allowed distance; higher means "different person"
+        self.FRAME_SCALE = 0.50    # scale frame to 25% for speed
+
+    def _decode_uploaded_image(self, uploaded_file):
+        """
+        UploadedFile -> BGR np.ndarray (OpenCV).
+        Safe even if file was read previously.
+        """
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+
+        data = uploaded_file.read()
+        if not data:
+            return None
+
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img_bgr
+
+    def ensure_dir(self, path: str):
+        """
+        If the folder exists, do nothing; if not, create it (no crash).
+        Equivalent to: mkdir -p path
+
+        Args:
+            path (str): the folder path to create if missing
+        """
+        os.makedirs(path, exist_ok=True)
+
+    def load_facial_database(self):
+        """
+        Loads the facial entries into memory for faster processing.
+        known_names lines up with the face encodings (index-aligned lists).
+
+        If the folder does not exist, create it and return an empty list.
+        This allows the program to run without errors.
+        If the database is empty, recognition will return "Unknown".
+        One folder is one person.
+
+        We iterate through each enrolled person:
+          - build the full path
+          - skip anything that isn't a folder
+
+        encodings.npy is the file inside each person folder.
+        If it does not exist, we skip that folder.
+
+        Returns:
+            (known_encodings, known_names)
+        """
+        known_encodings = []
+        known_names = []
+
+        if not os.path.isdir(self.KNOWN_FACES_DIR):
+            self.ensure_dir(self.KNOWN_FACES_DIR)
+            return known_encodings, known_names
+
+        try:
+            for name in sorted(os.listdir(self.KNOWN_FACES_DIR)):
+                person_dir = os.path.join(self.KNOWN_FACES_DIR, name)
+                if not os.path.isdir(person_dir):
+                    continue
+
+                enc_path = os.path.join(person_dir, "encodings.npy")
+                if not os.path.exists(enc_path):
+                    continue
+
+                encs = np.load(enc_path)
+                for e in encs:
+                    known_encodings.append(e)
+                    known_names.append(name)
+
+        except Exception as e:
+            print(f"[DB] Error loading database: {e}")
+            return [], []
+
+        print(f"[DB] Loaded {len(known_encodings)} encodings for {len(set(known_names))} people.")
+        return known_encodings, known_names
+
+    def save_encoding(self, name: str, encoding: np.ndarray):
+        """
+        Takes one face embedding and permanently attaches it to one person.
+
+        Creates folder: known_faces/<name>/
+        Appends to: encodings.npy (shape grows from (N,128) to (N+1,128))
+
+        Args:
+            name (str): name of the person
+            encoding (np.ndarray): embedding of the face characteristics
+        """
+        person_dir = os.path.join(self.KNOWN_FACES_DIR, name)
+        self.ensure_dir(person_dir)
+
+        enc_path = os.path.join(person_dir, "encodings.npy")
+
+        if os.path.exists(enc_path):
+            encs = np.load(enc_path)
+            encs = np.vstack([encs, encoding])
+        else:
+            encs = np.array([encoding])
+
+        np.save(enc_path, encs)
+        print(f"[ENROLL] Saved encoding for {name}. Total samples: {encs.shape[0]}")
+        return int(encs.shape[0])
+
+    def best_match(self, known_encodings, known_names, face_encoding):
+        """
+        Compares a single face encoding to all known encodings using face distance.
+
+        Returns:
+            (name, dist)
+        """
+        if not known_encodings:
+            return "Unknown", 999.0
+
+        dists = face_recognition.face_distance(known_encodings, face_encoding)
+        idx = int(np.argmin(dists))
+        dist = float(dists[idx])
+
+        if dist <= self.TOLERANCE:
+            return known_names[idx], dist
+        return "Unknown", dist
+
+    def _decode_uploaded_image(self, uploaded_file):
+        """
+        Convert Django UploadedFile -> OpenCV BGR image (np.ndarray).
+        """
+        data = uploaded_file.read()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img_bgr
+
+    def recognize_from_upload(self, uploaded_file):
+        frame = self._decode_uploaded_image(uploaded_file)
+        if frame is None:
+            return {"recognized": False, "name": "Unknown", "distance": 999.0, "error": "Invalid image"}
+
+        # (optional) temporarily save what the backend sees for debugging
+        # cv2.imwrite("/tmp/tektos_last.jpg", frame)
+
+        # Scale down (but not too much)
+        small = cv2.resize(frame, (0, 0), fx=self.FRAME_SCALE, fy=self.FRAME_SCALE)
+        rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+
+        locations = face_recognition.face_locations(rgb_small, model="hog")
+        if not locations:
+            return {"recognized": False, "name": "Unknown", "distance": 999.0}
+
+        encodings = face_recognition.face_encodings(rgb_small, locations)
+        if not encodings:
+            return {"recognized": False, "name": "Unknown", "distance": 999.0}
+
+        areas = [(b - t) * (r - l) for (t, r, b, l) in locations]
+        i = int(np.argmax(areas))
+        chosen_enc = encodings[i]
+
+        known_encodings, known_names = self.load_facial_database()
+        name, dist = self.best_match(known_encodings, known_names, chosen_enc)
+
+        # IMPORTANT: do NOT return the numpy encoding in the response
+        return {"recognized": name != "Unknown", "name": name, "distance": dist, "_encoding": chosen_enc}
+
+    def enroll_from_upload(self, uploaded_file, name: str):
+        result = self.recognize_from_upload(uploaded_file)
+        if "error" in result:
+            return {"ok": False, "error": result["error"]}
+
+        enc = result.get("_encoding")
+        if enc is None:
+            return {"ok": False, "error": "No face detected"}
+
+        samples_total = self.save_encoding(name, enc)
+        return {"ok": True, "enrolled": True, "name": name, "samples_total": samples_total}
+tool = FacialRecognitionTool()
+
+
+@csrf_exempt
+def recognize(request):
+    """
+    recognize endpoint
+
+    request:
+      Content-Type: multipart/form-data
+      image: <file>
+
+    response:
+      {
+        "ok": true,
+        "recognized": true|false,
+        "name": "Stevenson"|"Unknown",
+        "distance": 0.42,
+        "timestamp": "2025-12-22T20:15:00-05:00"
+      }
+    """
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    uploaded = request.FILES.get("image")
+    if not uploaded:
+        return JsonResponse({"ok": False, "error": "Missing form-data field: image"}, status=400)
+
+    result = tool.recognize_from_upload(uploaded)
+    if "error" in result:
+        return JsonResponse({"ok": False, "error": result["error"]}, status=400)
+
+    return JsonResponse({
+        "ok": True,
+        "recognized": bool(result["recognized"]),
+        "name": result["name"],
+        "distance": float(result["distance"]),
+        "timestamp": now().isoformat(),
+    })
+
+
+@csrf_exempt
+def enroll(request):
+    """
+    enroll endpoint
+
+    request:
+      Content-Type: multipart/form-data
+      image: <file>
+      name: <string>
+
+    response:
+      {
+        "ok": true,
+        "enrolled": true,
+        "name": "Stevenson",
+        "samples_total": 5,
+        "timestamp": "2025-12-22T20:16:02-05:00"
+      }
+    """
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"}, status=405)
+
+    uploaded = request.FILES.get("image")
+    name = (request.POST.get("name") or "").strip()
+
+    if not uploaded:
+        return JsonResponse({"ok": False, "error": "Missing form-data field: image"}, status=400)
+    if not name:
+        return JsonResponse({"ok": False, "error": "Missing form-data field: name"}, status=400)
+
+    # Optional: basic filesystem-safe name rule (recommended)
+    # This does NOT change your recognition logic; it avoids bad folder names.
+    safe = "".join(c for c in name if c.isalnum() or c in (" ", "-", "_")).strip()
+    if not safe:
+        return JsonResponse({"ok": False, "error": "Invalid name"}, status=400)
+
+    out = tool.enroll_from_upload(uploaded, safe)
+    if not out.get("ok"):
+        return JsonResponse({"ok": False, "error": out.get("error", "Enroll failed")}, status=400)
+
+    return JsonResponse({
+        "ok": True,
+        "enrolled": True,
+        "name": out["name"],
+        "samples_total": out["samples_total"],
+        "timestamp": now().isoformat(),
+    })

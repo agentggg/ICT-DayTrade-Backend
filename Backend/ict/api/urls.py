@@ -13,6 +13,8 @@ urlpatterns = [
     path("flashcard", flashcard, name="flashcard"),
     path("get_flashcard", get_flashcard, name="get_flashcard"),
     path("predict/", predict, name="predict"),
+    path("recognize/", recognize, name="recognize"),
+    path("enroll/", enroll, name="enroll"),
 
 ]
      
