@@ -65,7 +65,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://agentggg.github.io",
     "https://38beafde7ec6.ngrok-free.app",
     "http://localhost:8000",
-    "http://localhost:8010"
+    "http://localhost:8010",
+    "https://gentle-conferences-employed-graduation.trycloudflare.com",
 ]
  
 TEMPLATES = [
