@@ -60,16 +60,14 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'ict.urls'
-# CORS_ALLOW_ALL_ORIGINS = True
+
 CORS_ALLOWED_ORIGINS = [
     "https://agentggg.github.io",
-    "https://38beafde738beafde7ec6ec6.ngrok-free.app",
+    "https://38beafde7ec6.ngrok-free.app",
     "http://localhost:8000",
-    "http://localhost:8010",
-] 
+    "http://localhost:8010"
+]
  
-# CORS_ALLOW_CREDENTIALS = True
-
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -87,7 +85,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'ict.wsgi.application'
-
 
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
