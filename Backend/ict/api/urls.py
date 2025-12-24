@@ -15,6 +15,7 @@ urlpatterns = [
     path("predict/", predict, name="predict"),
     path("recognize/", recognize, name="recognize"),
     path("enroll/", enroll, name="enroll"),
+    path("hand_recognition/", hand_recognition, name="hand_recognition"),
 
 ]
      

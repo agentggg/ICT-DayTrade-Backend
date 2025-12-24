@@ -47,8 +47,24 @@ import face_recognition
 
 from ultralytics import YOLO
 import cv2
+import mediapipe as mp
+from mediapipe.tasks.python import vision
 
 model = YOLO("yolov8n.pt") # Load model once (process-level singleton)
+MODEL_PATH = "model/gesture_recognizer.task"
+ 
+BaseOptions = mp.tasks.BaseOptions
+GestureRecognizer = vision.GestureRecognizer
+GestureRecognizerOptions = vision.GestureRecognizerOptions
+VisionRunningMode = vision.RunningMode
+
+_options = GestureRecognizerOptions(
+    base_options=BaseOptions(model_asset_path=MODEL_PATH),
+    running_mode=VisionRunningMode.VIDEO,
+)
+
+_recognizer = GestureRecognizer.create_from_options(_options)
+_lock = threading.Lock()
 
 @api_view(['GET', 'POST'])
 def test(request):
@@ -443,7 +459,7 @@ def predict(request):
         # half=True,
         half=False # true only works on GPU
     )   
-    for box in r.boxes:
+    for box in results.boxes:
         x1, y1, x2, y2 = box.xyxy[0]
         conf = box.conf[0]
         cls_id = int(box.cls[0])
@@ -727,4 +743,132 @@ def enroll(request):
         "name": out["name"],
         "samples_total": out["samples_total"],
         "timestamp": now().isoformat(),
+    })
+
+
+# IMPORTANT: single shared recognizer must be locked (thread safety)
+
+
+def _strip_data_url_prefix(b64: str) -> str:
+    if not b64:
+        return b64
+    if "base64," in b64:
+        return b64.split("base64,", 1)[1]
+    return b64
+ 
+def _decode_jpeg_b64_to_bgr(b64: str) -> np.ndarray:
+    """
+    Decodes base64 JPEG -> OpenCV BGR image.
+    """
+    b64 = _strip_data_url_prefix(b64)
+    import base64
+    raw = base64.b64decode(b64, validate=False)
+    arr = np.frombuffer(raw, dtype=np.uint8)
+    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    if bgr is None:
+        raise ValueError("cv2.imdecode returned None (invalid jpeg?)")
+    return bgr
+
+def _normalize_result(result) -> dict:
+    """
+    Convert MediaPipe result to frontend contract.
+    """
+    top_gesture = None
+    gestures_out = []
+    handedness_out = []
+
+    if result and result.gestures and len(result.gestures) > 0 and len(result.gestures[0]) > 0:
+        # first hand's gesture list
+        for g in result.gestures[0][:5]:
+            gestures_out.append({"name": g.category_name, "score": float(g.score)})
+
+        best = result.gestures[0][0]
+        top_gesture = {"name": best.category_name, "score": float(best.score)}
+
+    if result and result.handedness and len(result.handedness) > 0 and len(result.handedness[0]) > 0:
+        h = result.handedness[0][0]
+        handedness_name = h.category_name
+        handedness_score = float(h.score)
+
+        # NOTE:
+        # If your frontend is mirrored (front camera), handedness may appear flipped visually.
+        # Do NOT flip here unless you are 100% sure you want "screen-left/right" semantics.
+        handedness_out.append({"name": handedness_name, "score": handedness_score})
+
+    return {
+        "top_gesture": top_gesture,
+        "gestures": gestures_out,
+        "handedness": handedness_out,
+    }
+
+@csrf_exempt
+def hand_recognition(request):
+    import time
+    """
+    Django endpoint that uses your OpenCV->RGB->mp.Image->recognize_for_video strategy.
+    """
+    t0 = time.time()
+
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": {"code": "METHOD", "message": "POST required"}}, status=405)
+
+    # Parse JSON
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return JsonResponse({"ok": False, "error": {"code": "JSON", "message": "Invalid JSON"}}, status=400)
+
+    session_id = payload.get("session_id")
+    frame_id = payload.get("frame_id")
+    ts_client_ms = payload.get("ts_client_ms")
+
+    image_obj = payload.get("image") or {}
+    data_b64 = image_obj.get("data_b64")
+
+    if not data_b64:
+        return JsonResponse({"ok": False, "error": {"code": "IMAGE", "message": "image.data_b64 missing"}}, status=400)
+
+    # Decode JPEG -> OpenCV BGR
+    try:
+        frame_bgr = _decode_jpeg_b64_to_bgr(data_b64)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": {"code": "DECODE", "message": str(e)}}, status=400)
+
+    # Match your desktop pipeline:
+    # (optional) flip if your frontend is mirrored. Generally, the frontend already mirrors.
+    # frame_bgr = cv2.flip(frame_bgr, 1)
+
+    # Convert BGR -> RGB for MediaPipe
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+    # mp.Image from RGB numpy
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+    # VIDEO mode requires increasing timestamps (ms).
+    # Use client ts if provided; else server now.
+    ts_ms = int(ts_client_ms) if ts_client_ms else int(time.time() * 1000)
+
+    # Recognize (one call)
+    try:
+        with _lock:
+            result = _recognizer.recognize_for_video(mp_image, ts_ms)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": {"code": "INFER", "message": str(e)}}, status=500)
+
+    latency_ms = int((time.time() - t0) * 1000)
+    normalized = _normalize_result(result)
+
+    warnings = []
+    if not normalized["top_gesture"]:
+        warnings.append("NO_HAND_OR_GESTURE")
+
+    return JsonResponse({
+        "ok": True,
+        "session_id": session_id,
+        "frame_id": frame_id,
+        "ts_server_ms": int(time.time() * 1000),
+        "latency_ms": latency_ms,
+        "result": normalized,
+        "warnings": warnings,
+        "error": None
     })
