@@ -52,28 +52,178 @@ from pathlib import Path
 
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Tuple
-from .hand_recognition import HandLandmarkService
 from pathlib import Path
 import threading
 from django.conf import settings
-from .hand_recognition import HandLandmarkService
 
-_HAND_LOCK = threading.Lock()
-_HAND_SERVICE = None
+# --- HandLandmarkService import (robust) ---
+# Preferred: a normal python module in this package, e.g. `hand_recognition.py`.
+# Fallback: load from a file on disk (handles odd filenames like `hand recognition.py`).
+try:
+    from .hand_recognition import HandLandmarkService  # type: ignore
+except Exception:
+    try:
+        # Alternate module name some projects use
+        from .hand_landmarker_service import HandLandmarkService  # type: ignore
+    except Exception:
+        import importlib.util
 
-def get_hand_service():
-    global _HAND_SERVICE
-    if _HAND_SERVICE is not None:
-        return _HAND_SERVICE
+        _api_dir = Path(__file__).resolve().parent
+        _candidates = [
+            _api_dir / "hand_recognition.py",
+            _api_dir / "hand recognition.py",
+            _api_dir / "hand_landmarker_service.py",
+            _api_dir / "hand_landmarker.py",
+        ]
 
-    with _HAND_LOCK:
-        if _HAND_SERVICE is not None:
-            return _HAND_SERVICE
+        _loaded = False
+        _last_err: Optional[Exception] = None
 
-        model_path = str(Path(settings.BASE_DIR) / "model" / "hand_landmarker.task")
-        _HAND_SERVICE = HandLandmarkService(model_asset_path=model_path)
-        return _HAND_SERVICE
+        for _path in _candidates:
+            if not _path.exists():
+                continue
+            try:
+                _spec = importlib.util.spec_from_file_location("ict.api.hand_landmark_fallback", str(_path))
+                if _spec is None or _spec.loader is None:
+                    continue
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)  # type: ignore
+                HandLandmarkService = getattr(_mod, "HandLandmarkService")
+                _loaded = True
+                break
+            except Exception as _e:
+                _last_err = _e
 
+        if not _loaded:
+            existing = [str(p.name) for p in _candidates if p.exists()]
+            hint = (
+                "Could not import HandLandmarkService. Django tried to import: `ict.api.hand_recognition`, "
+                "but that module file does not exist.\n\n"
+                "Fix (recommended): rename your file to `hand_recognition.py` and keep it in `Backend/ict/api/`.\n"
+                "Also ensure `Backend/ict/api/__init__.py` exists so Python treats it as a package.\n\n"
+                f"Searched for these files in {str(_api_dir)}:\n- " + "\n- ".join([p.name for p in _candidates]) + "\n\n"
+                f"Files that actually exist from that list: {existing or 'NONE'}"
+            )
+            if _last_err:
+                raise ImportError(hint + f"\n\nLast loader error: {_last_err}")
+            raise ImportError(hint)
+
+# --- GestureRecognizerService (inline; removes need for gesture_recognizer_service.py) ---
+class GestureRecognizerService:
+    """Thin wrapper around MediaPipe Tasks GestureRecognizer (.task) for IMAGE inference."""
+
+    def __init__(self, model_asset_path: str):
+        if not os.path.isfile(model_asset_path):
+            raise FileNotFoundError(f"Missing gesture model: {model_asset_path}")
+
+        GestureRecognizer = mp.tasks.vision.GestureRecognizer
+        GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
+        RunningMode = mp.tasks.vision.RunningMode
+        BaseOptions = mp.tasks.BaseOptions
+
+        options = GestureRecognizerOptions(
+            base_options=BaseOptions(model_asset_path=model_asset_path),
+            running_mode=RunningMode.IMAGE,
+        )
+        self._recognizer = GestureRecognizer.create_from_options(options)
+        self._lock = threading.Lock()
+
+    def process_bgr(self, img_bgr: np.ndarray) -> Dict[str, Any]:
+        if img_bgr is None or img_bgr.size == 0:
+            return {"gestures": [], "handedness": []}
+
+        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+        with self._lock:
+            result = self._recognizer.recognize(mp_image)
+
+        gestures_out: list[dict] = []
+        if getattr(result, "gestures", None) and result.gestures and len(result.gestures[0]) > 0:
+            for g in result.gestures[0]:
+                gestures_out.append({"name": g.category_name, "score": float(g.score or 0.0)})
+
+        handed_out: list[dict] = []
+        if getattr(result, "handedness", None) and result.handedness and len(result.handedness[0]) > 0:
+            for h in result.handedness[0]:
+                handed_out.append({"name": h.category_name, "score": float(h.score or 0.0)})
+
+        return {"gestures": gestures_out, "handedness": handed_out}
+
+
+_SERVICES_LOCK = threading.Lock()
+_SERVICES = None
+
+def get_hand_services():
+    """
+    Returns:
+      services["landmarker"] -> HandLandmarkService
+      services["gesture"]    -> GestureRecognizerService
+    """
+    global _SERVICES
+    if _SERVICES is not None:
+        return _SERVICES
+
+    with _SERVICES_LOCK:
+        if _SERVICES is not None:
+            return _SERVICES
+
+        base = Path(settings.BASE_DIR) / "model"
+        landmarker_path = str(base / "hand_landmarker.task")
+        gesture_path = str(base / "gesture_recognizer.task")
+
+        _SERVICES = {
+            "landmarker": HandLandmarkService(model_asset_path=landmarker_path),
+            "gesture": GestureRecognizerService(model_asset_path=gesture_path),
+        }
+        return _SERVICES
+
+
+# --------------------------------------------------------------------------
+# Endpoint: hand_landmarks (returns landmarks and fingertips via landmarker)
+# --------------------------------------------------------------------------
+@csrf_exempt
+def hand_landmarks(request):
+    """Return MediaPipe hand landmarks (and fingertips) in your HandLandmarkService contract."""
+
+    if request.method != "POST":
+        return JsonResponse({
+            "ok": False,
+            "error": {"code": "METHOD_NOT_ALLOWED", "message": "POST required"}
+        }, status=405)
+
+    t0 = time.time()
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+        image_b64 = payload["image"]["data_b64"]
+        img_bgr = _decode_b64_jpeg(image_b64)
+
+        services = get_hand_services()
+        landmarker = services["landmarker"]
+
+        hands = landmarker.detect(img_bgr)
+        latency_ms = int((time.time() - t0) * 1000)
+
+        if not hands:
+            return JsonResponse({
+                "ok": False,
+                "latency_ms": latency_ms,
+                "error": {"code": "NO_HAND", "message": "No hand detected"},
+                "hands": [],
+            })
+
+        return JsonResponse({
+            "ok": True,
+            "latency_ms": latency_ms,
+            "hands": hands,
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            "ok": False,
+            "error": {"code": "SERVER_ERROR", "message": str(e)}
+        }, status=500)
 _DETECTOR = None
 # ------------------------------------------------------------------------------
 # YOLO (object detection) - keep your existing singleton if you want
@@ -1126,48 +1276,63 @@ def _extract_top(result: vision.GestureRecognizerResult) -> Tuple[Optional[Dict[
 
     return top_gesture, top_hand
 
+
 @csrf_exempt
-def hand_recognition(request):
+def gesture_recognition(request):
     if request.method != "POST":
-        return _err("METHOD_NOT_ALLOWED", "POST only", http=405)
+        return JsonResponse({
+            "ok": False,
+            "error": {
+                "code": "METHOD_NOT_ALLOWED",
+                "message": "POST required"
+            }
+        }, status=405)
 
     t0 = time.time()
-    ts_server_ms = int(time.time() * 1000)
 
     try:
-        body = request.body.decode("utf-8") if request.body else ""
-        data = json.loads(body) if body else {}
-    except Exception:
-        return _err("BAD_JSON", "Request body must be valid JSON", http=400)
+        payload = json.loads(request.body.decode("utf-8"))
+        image_b64 = payload["image"]["data_b64"]
 
-    session_id = data.get("session_id", "")
-    frame_id = data.get("frame_id", None)
+        services = get_hand_services()
+        gesture_service = services["gesture"]
 
-    image = data.get("image") or {}
-    b64 = image.get("data_b64")
+        img_bgr = _decode_b64_jpeg(image_b64)  # returns BGR np.ndarray
+        result = gesture_service.process_bgr(img_bgr)
 
-    if not b64:
-        return _err("IMAGE_MISSING", "image.data_b64 missing", http=400)
+        latency_ms = int((time.time() - t0) * 1000)
 
-    img_bgr = _decode_b64_jpeg(b64)
-    if img_bgr is None:
-        return _err("IMAGE_DECODE_FAILED", "Could not decode base64 jpeg", http=400)
+        # If your service returns gestures list
+        if not result.get("gestures"):
+            return JsonResponse({
+                "ok": False, 
+                "error": {
+                    "code": "NO_HAND",
+                    "message": "No hand detected"
+                }
+            })
 
-    # Run model
-    try:
-        hands = get_hand_service().detect(img_bgr)
+        top = result["gestures"][0]
+        handed = result.get("handedness", [])
+
+        return JsonResponse({
+            "ok": True,
+            "latency_ms": latency_ms,
+            "result": {
+                "top_gesture": {
+                    "name": top["name"],
+                    "score": round(float(top["score"]), 4)
+                },
+                "handedness": handed
+            },
+            "warnings": []
+        })
+
     except Exception as e:
-        return _err("MODEL_ERROR", "Hand model failed", http=500, extra={"detail": str(e)})
-
-    latency_ms = int((time.time() - t0) * 1000)
-
-    return JsonResponse({
-        "ok": True,
-        "session_id": session_id,
-        "frame_id": frame_id,
-        "ts_server_ms": ts_server_ms,
-        "latency_ms": latency_ms,
-        "hands": hands,
-        "warnings": [],
-        "error": None
-    })
+        return JsonResponse({
+            "ok": False,
+            "error": {
+                "code": "SERVER_ERROR",
+                "message": str(e)
+            }
+        }, status=500)

@@ -15,7 +15,7 @@ urlpatterns = [
     path("predict/", predict, name="predict"),
     path("recognize/", recognize, name="recognize"),
     path("enroll/", enroll, name="enroll"),
-    path("hand_landmarks/", hand_recognition, name="hand_landmarks"),
+    path("hand_landmarks/", hand_landmarks, name="hand_landmarks"),
     path("gesture_recognition/", gesture_recognition, name="gesture_recognition"),
     path("object_gesture/", object_gesture, name="object_gesture"),
     
