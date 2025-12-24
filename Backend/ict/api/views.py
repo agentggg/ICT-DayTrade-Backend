@@ -50,6 +50,9 @@ import cv2
 import mediapipe as mp
 from mediapipe.tasks.python import vision
 
+_model = None
+_model_lock = threading.Lock()
+
 model = YOLO("yolov8n.pt") # Load model once (process-level singleton)
 MODEL_PATH = "model/gesture_recognizer.task"
  
@@ -436,45 +439,56 @@ def get_flashcard(request):
     """
 
 
+def get_model():
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                _model = YOLO("yolov8x.pt")  # or yolov8s.pt, etc.
+    return _model
 
 @csrf_exempt  # simplest for local dev; see CSRF notes below for production
 def predict(request):
     if request.method != "POST":
         return JsonResponse({"error": "POST only"}, status=405)
-    
-    _img = request.FILES.get('image', False)
-    if _img == False:
-        return JsonResponse({"error": "Image not processed"}, status=500)
-    pil_image = Image.open(io.BytesIO(_img.read()))
-    pil_image = pil_image.convert("RGB")
-    img = np.array(pil_image)
-    results = model(
-        source=img,
-        conf=0.25,
-        iou=0.7, # must stduy
-        imgsz=640,  # common imag size
-        verbose=False, # debug
-        save=False, # save the image
-        device="cpu", # option is GPU or CPU
-        # half=True,
-        half=False # true only works on GPU
-    )   
-    for box in results.boxes:
-        x1, y1, x2, y2 = box.xyxy[0]
-        conf = box.conf[0]
-        cls_id = int(box.cls[0])
-    """ 
-        source, 
-        conf=0.25, 
-        iou=0.7,
-        imgsz=640,
-        device="cpu",
+
+    if "image" not in request.FILES:
+        return JsonResponse({"error": "Missing file field 'image'."}, status=400)
+
+    # Confidence threshold
+    try:
+        conf = float(request.POST.get("conf", "0.25"))
+    except ValueError:
+        conf = 0.15
+
+    # Read uploaded image into numpy array (RGB)
+    uploaded = request.FILES["image"].read()
+    img = Image.open(io.BytesIO(uploaded)).convert("RGB")
+    frame = np.array(img)  # shape: (H, W, 3) RGB
+    model = get_model()
+
+    # Run inference (no saving)
+    results = model.predict(
+        frame,
+        conf=conf,
+        iou=0.5,
+        max_det=300,
+        imgsz=960,
         verbose=False
-    """  
-    return JsonResponse({"detections": "detections"})
-   
+    )
+    r = results[0]
+    detections = []
+    if r.boxes is not None and len(r.boxes) > 0:
+        for box in r.boxes:
+            cls_id = int(box.cls[0])
+            detections.append({
+                "class_id": cls_id,
+                "class_name": model.names.get(cls_id, str(cls_id)),
+                "confidence": float(box.conf[0]),
+                "bbox_xyxy": [float(x) for x in box.xyxy[0].tolist()],  # [x1,y1,x2,y2]
+            })
 
-
+    return JsonResponse({"detections": detections})
 
 
 class FacialRecognitionTool:
