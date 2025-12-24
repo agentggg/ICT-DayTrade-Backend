@@ -53,7 +53,26 @@ from pathlib import Path
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Tuple
 from .hand_recognition import HandLandmarkService
-hand_service = HandLandmarkService()  # singleton-ish
+from pathlib import Path
+import threading
+from django.conf import settings
+from .hand_recognition import HandLandmarkService
+
+_HAND_LOCK = threading.Lock()
+_HAND_SERVICE = None
+
+def get_hand_service():
+    global _HAND_SERVICE
+    if _HAND_SERVICE is not None:
+        return _HAND_SERVICE
+
+    with _HAND_LOCK:
+        if _HAND_SERVICE is not None:
+            return _HAND_SERVICE
+
+        model_path = str(Path(settings.BASE_DIR) / "model" / "hand_landmarker.task")
+        _HAND_SERVICE = HandLandmarkService(model_asset_path=model_path)
+        return _HAND_SERVICE
 
 _DETECTOR = None
 # ------------------------------------------------------------------------------
@@ -925,7 +944,7 @@ def _decode_b64_jpeg(b64: str) -> np.ndarray:
         raise ValueError("Failed to decode JPEG (cv2.imdecode returned None)")
 
     return img
-    
+
 # -----------------------------
 def decode_image(uploaded_file):
     data = uploaded_file.read()
@@ -1136,7 +1155,7 @@ def hand_recognition(request):
 
     # Run model
     try:
-        hands = hand_service.detect(img_bgr)
+        hands = get_hand_service().detect(img_bgr)
     except Exception as e:
         return _err("MODEL_ERROR", "Hand model failed", http=500, extra={"detail": str(e)})
 
