@@ -682,7 +682,7 @@ def enroll(request):
 # Hand recognition (FIXED: you must initialize recognizer; placeholder for now)
 # ------------------------------------------------------------------------------
 @csrf_exempt
-def hand_recognition(request):
+def hand_landmarks(request):
     """
     You had `_lock` and `_recognizer` referenced but not defined.
     This endpoint will return a clean error until you add your MediaPipe gesture recognizer init.
