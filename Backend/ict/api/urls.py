@@ -17,6 +17,7 @@ urlpatterns = [
     path("enroll/", enroll, name="enroll"),
     path("hand_recognition/", hand_recognition, name="hand_recognition"),
     path("object_gesture/", object_gesture, name="object_gesture"),
+    path("object_gesture/", object_gesture, name="object_gesture"),
     
 
 ]
