@@ -18,7 +18,7 @@ urlpatterns = [
     path("hand_landmarks/", hand_landmarks, name="hand_landmarks"),
     path("gesture_recognition/", gesture_recognition, name="gesture_recognition"),
     path("object_gesture/", object_gesture, name="object_gesture"),
+    path("bulk_upsert_flashcards_array/", bulk_upsert_flashcards_array, name="bulk_upsert_flashcards_array"),
     
-
 ]
       

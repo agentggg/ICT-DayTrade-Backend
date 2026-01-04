@@ -15,10 +15,8 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-STATIC_URL = "/static/"
-
-# Where collected static files will be stored on the server
-STATIC_ROOT = "/home/agentofgod/ICT/static/"
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
@@ -51,12 +49,13 @@ INSTALLED_APPS = [
 MIDDLEWARE = [ 
     'corsheaders.middleware.CorsMiddleware', 
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware'
 ]
 
 ROOT_URLCONF = 'ict.urls'
@@ -66,7 +65,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://38beafde7ec6.ngrok-free.app",
     "http://localhost:8000",
     "http://localhost:8010",
-    "https://gentle-conferences-employed-graduation.trycloudflare.com"
+    "https://gentle-conferences-employed-graduation.trycloudflare.com",
+    ".herokuapp.com"
 ]
  
 TEMPLATES = [

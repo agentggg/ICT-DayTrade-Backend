@@ -1007,7 +1007,9 @@ def flashcard(request):
 @api_view(['GET'])
 def get_flashcard(request):
     course = request.GET.get('course', False)
-    cards = Flashcard.objects.filter(course=course)
+    cards = Flashcard.objects.filter(course=course).order_by('?')
+    cards = (list(reversed(cards)))
+    # learning curve
     response = FlashCardSerializers(cards, many=True).data
     return Response(response)
 
@@ -1336,3 +1338,86 @@ def gesture_recognition(request):
                 "message": str(e)
             }
         }, status=500)
+
+
+@csrf_exempt
+@require_POST
+def bulk_upsert_flashcards_array(request):
+    """
+    POST body MUST be a JSON array:
+
+    [
+      {"course":"python","question":"...","answer":"...","reasoning":"..."},
+      ...
+    ]
+    """
+    # Parse JSON
+    try:
+        raw = request.body.decode("utf-8") if request.body else ""
+        if not raw:
+            return JsonResponse({"error": "Empty request body"}, status=400)
+        flashcards = json.loads(raw)
+    except Exception as e:
+        return JsonResponse({"error": "Invalid JSON", "details": str(e)}, status=400)
+
+    # Validate array
+    if not isinstance(flashcards, list):
+        return JsonResponse({"error": "Body must be a JSON array"}, status=400)
+    if len(flashcards) == 0:
+        return JsonResponse({"error": "Array is empty"}, status=400)
+
+    required = ["course", "question", "answer", "reasoning"]
+
+    created_count = 0
+    updated_count = 0
+    skipped_count = 0
+    errors = []
+
+    for i, card in enumerate(flashcards):
+        if not isinstance(card, dict):
+            skipped_count += 1
+            errors.append({"index": i, "error": "Item must be an object"})
+            continue
+
+        missing = [k for k in required if not card.get(k)]
+        if missing:
+            skipped_count += 1
+            errors.append({"index": i, "error": "Missing fields", "missing": missing})
+            continue
+
+        # Upsert behavior: unique by (course, question)
+        obj, created = Flashcard.objects.get_or_create(
+            course=card["course"],
+            question=card["question"],
+            defaults={
+                "answer": card["answer"],
+                "reasoning": card["reasoning"],
+            },
+        )
+
+        if created:
+            created_count += 1
+        else:
+            changed = False
+            if obj.answer != card["answer"]:
+                obj.answer = card["answer"]
+                changed = True
+            if obj.reasoning != card["reasoning"]:
+                obj.reasoning = card["reasoning"]
+                changed = True
+
+            if changed:
+                obj.save(update_fields=["answer", "reasoning"])
+                updated_count += 1
+
+    return JsonResponse(
+        {
+            "ok": True,
+            "received": len(flashcards),
+            "created": created_count,
+            "updated": updated_count,
+            "skipped": skipped_count,
+            "errors": errors,
+        },
+        status=200,
+    )
