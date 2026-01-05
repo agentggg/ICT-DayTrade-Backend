@@ -129,3 +129,10 @@ class TradeJournalSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data = self._compute_risk_fields(validated_data)
         return super().update(instance, validated_data)
+
+
+class AiQuestionSerializers(serializers.ModelSerializer):
+    
+    class Meta:
+        model = AiQuestion
+        fields = "__all__" 

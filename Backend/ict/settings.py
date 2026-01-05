@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
-    'sslserver'
 ] 
 
 MIDDLEWARE = [ 
@@ -62,11 +61,9 @@ ROOT_URLCONF = 'ict.urls'
 
 CORS_ALLOWED_ORIGINS = [
     "https://agentggg.github.io",
-    "https://38beafde7ec6.ngrok-free.app",
     "http://localhost:8000",
     "http://localhost:8010",
     "https://gentle-conferences-employed-graduation.trycloudflare.com",
-    ".herokuapp.com"
 ]
  
 TEMPLATES = [

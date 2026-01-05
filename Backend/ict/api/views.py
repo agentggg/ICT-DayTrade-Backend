@@ -56,6 +56,427 @@ from pathlib import Path
 import threading
 from django.conf import settings
 
+
+import re
+import string
+from nltk.stem import PorterStemmer
+from spellchecker import SpellChecker
+from sentence_transformers import SentenceTransformer, util, CrossEncoder
+import torch
+from transformers import pipeline
+from happytransformer import  HappyTextToText, TTSettings
+happy_tt = HappyTextToText("T5", "vennify/t5-base-grammar-correction")
+beam_settings =  TTSettings(min_length=1) # https://happytransformer.com/text-to-text/settings/?ref=vennify.ai
+import os
+from keybert import KeyBERT
+import numpy as np
+
+
+
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+_gec = pipeline(
+    "text2text-generation",
+    model="prithivida/grammar_error_correcter_v1"
+)
+
+STEMMER = PorterStemmer()
+SPELL = SpellChecker()
+SENT_TRANS_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+PIPE = pipeline(model="FacebookAI/roberta-large-mnli")
+_CE = CrossEncoder("cross-encoder/stsb-roberta-base")
+_KW = KeyBERT(model=SENT_TRANS_MODEL)
+
+class PROCESSING():
+    def __init__(self):
+        self.STOPWORDS = [
+            "a","about","above","after","again","against","all","am","an","and","any","are",
+            "aren't","as","at","be","because","been","before","being","below","between","both",
+            "but","by","can","cannot","could","couldn't","did","didn't","do","does","doesn't",
+            "doing","don't","down","during","each","few","for","from","further","had","hadn't",
+            "has","hasn't","have","haven't","having","he","he'd","he'll","he's","her","here",
+            "here's","hers","herself","him","himself","his","how","how's","i","i'd","i'll",
+            "i'm","i've","if","in","into","is","isn't","it","it's","its","itself","let's","me",
+            "more","most","mustn't","my","myself","no","nor","not","of","off","on","once","only",
+            "or","other","ought","our","ours","ourselves","out","over","own","same","shan't",
+            "she","she'd","she'll","she's","should","shouldn't","so","some","such","than","that",
+            "that's","the","their","theirs","them","themselves","then","there","there's","these",
+            "they","they'd","they'll","they're","they've","this","those","through","to","too",
+            "under","until","up","very","was","wasn't","we","we'd","we'll","we're","we've",
+            "were","weren't","what","what's","when","when's","where","where's","which","while",
+            "who","who's","whom","why","why's","with","won't","would","wouldn't","you","you'd",
+            "you'll","you're","you've","your","yours","yourself","yourselves"
+        ]
+        self.CONTRACTION_WORD = [
+            "ain't","aren't","can't","can't've","could've","couldn't","couldn't've",
+            "didn't","doesn't","don't","hadn't","hadn't've","hasn't","haven't","he'd",
+            "he'd've","he'll","he'll've","he's","how'd","how'd'y","how'll","how's",
+            "i'd","i'd've","i'll","i'll've","i'm","i've","isn't","it'd","it'd've",
+            "it'll","it'll've","it's","let's","ma'am","mayn't","might've","mightn't",
+            "mightn't've","must've","mustn't","mustn't've","needn't","needn't've",
+            "o'clock","oughtn't","oughtn't've","shan't","shan't've","she'd","she'd've",
+            "she'll","she'll've","she's","should've","shouldn't","shouldn't've",
+            "so've","so's","that'd","that'd've","that's","there'd","there'd've",
+            "there's","they'd","they'd've","they'll","they'll've","they're","they've",
+            "to've","wasn't","we'd","we'd've","we'll","we'll've","we're","we've",
+            "weren't","what'll","what'll've","what're","what's","what've","when's",
+            "when've","where'd","where's","where've","who'll","who'll've","who's",
+            "who've","why's","why've","will've","won't","won't've","would've",
+            "wouldn't","wouldn't've","y'all","y'all'd","y'all'd've","y'all're",
+            "y'all've","you'd","you'd've","you'll","you'll've","you're","you've"
+        ]
+        self.CONTRACTION_MAP = {
+            "ain't": "am not",
+            "aren't": "are not",
+            "can't": "cannot",
+            "can't've": "cannot have",
+            "could've": "could have",
+            "couldn't": "could not",
+            "couldn't've": "could not have",
+            "didn't": "did not",
+            "doesn't": "does not",
+            "don't": "do not",
+            "hadn't": "had not",
+            "hadn't've": "had not have",
+            "hasn't": "has not",
+            "haven't": "have not",
+            "he'd": "he would",
+            "he'd've": "he would have",
+            "he'll": "he will",
+            "he'll've": "he will have",
+            "he's": "he is",
+            "how'd": "how did",
+            "how'd'y": "how do you",
+            "how'll": "how will",
+            "how's": "how is",
+            "i'd": "i would",
+            "i'd've": "i would have",
+            "i'll": "i will",
+            "i'll've": "i will have",
+            "i'm": "i am",
+            "i've": "i have",
+            "isn't": "is not",
+            "it'd": "it would",
+            "it'd've": "it would have",
+            "it'll": "it will",
+            "it'll've": "it will have",
+            "it's": "it is",
+            "let's": "let us",
+            "ma'am": "madam",
+            "mayn't": "may not",
+            "might've": "might have",
+            "mightn't": "might not",
+            "mightn't've": "might not have",
+            "must've": "must have",
+            "mustn't": "must not",
+            "mustn't've": "must not have",
+            "needn't": "need not",
+            "needn't've": "need not have",
+            "o'clock": "of the clock",
+            "oughtn't": "ought not",
+            "oughtn't've": "ought not have",
+            "shan't": "shall not",
+            "shan't've": "shall not have",
+            "she'd": "she would",
+            "she'd've": "she would have",
+            "she'll": "she will",
+            "she'll've": "she will have",
+            "she's": "she is",
+            "should've": "should have",
+            "shouldn't": "should not",
+            "shouldn't've": "should not have",
+            "so've": "so have",
+            "so's": "so is",
+            "that'd": "that would",
+            "that'd've": "that would have",
+            "that's": "that is",
+            "there'd": "there would",
+            "there'd've": "there would have",
+            "there's": "there is",
+            "they'd": "they would",
+            "they'd've": "they would have",
+            "they'll": "they will",
+            "they'll've": "they will have",
+            "they're": "they are",
+            "they've": "they have",
+            "to've": "to have",
+            "wasn't": "was not",
+            "we'd": "we would",
+            "we'd've": "we would have",
+            "we'll": "we will",
+            "we'll've": "we will have",
+            "we're": "we are",
+            "we've": "we have",
+            "weren't": "were not",
+            "what'll": "what will",
+            "what'll've": "what will have",
+            "what're": "what are",
+            "what's": "what is",
+            "what've": "what have",
+            "when's": "when is",
+            "when've": "when have",
+            "where'd": "where did",
+            "where's": "where is",
+            "where've": "where have",
+            "who'll": "who will",
+            "who'll've": "who will have",
+            "who's": "who is",
+            "who've": "who have",
+            "why's": "why is",
+            "why've": "why have",
+            "will've": "will have",
+            "won't": "will not",
+            "won't've": "will not have",
+            "would've": "would have",
+            "wouldn't": "would not",
+            "wouldn't've": "would not have",
+            "y'all": "you all",
+            "y'all'd": "you all would",
+            "y'all'd've": "you all would have",
+            "y'all're": "you all are",
+            "y'all've": "you all have",
+            "you'd": "you would",
+            "you'd've": "you would have",
+            "you'll": "you will",
+            "you'll've": "you will have",
+            "you're": "you are",
+            "you've": "you have"
+        }
+        self.DEMO_DATA = {
+            "question": "What is Python?",
+            "official_answer": "Python is a high-level, interpreted programming language used to build software, automate tasks, and develop applications.",
+            "require_keypoints": 1,
+            "pass_score": 0.45
+        }
+        self.SIGNAL_INTERPRETATION = {
+            "sentence_compare": {
+                "low": {
+                    "range": (0, 30),
+                    "message": "The meaning does not strongly align with the expected answer."
+                },
+                "medium": {
+                    "range": (30, 55),
+                    "message": "The answer is somewhat related, but key ideas are missing or unclear."
+                },
+                "high": {
+                    "range": (55, 80),
+                    "message": "The answer captures most of the intended meaning."
+                },
+                "awesome": {
+                    "range": (80, 100),
+                    "message": "The answer matches the expected meaning very well."
+                },
+            },
+
+            "keyword_finder": {
+                "low": {
+                    "range": (0, 40),
+                    "message": "Key terms were mostly missing."
+                },
+                "medium": {
+                    "range": (40, 70),
+                    "message": "Some important keywords were used, but coverage is incomplete."
+                },
+                "high": {
+                    "range": (70, 90),
+                    "message": "Most of the important keywords were used correctly."
+                },
+                "awesome": {
+                    "range": (90, 101),
+                    "message": "Excellent keyword usage with strong coverage of key concepts."
+                },
+            },
+
+            "topic_sent": {
+                "low": {
+                    "range": (0, 30),
+                    "message": "The response does not stay focused on the main topic."
+                },
+                "medium": {
+                    "range": (30, 55),
+                    "message": "The response is on topic but lacks clarity or precision."
+                },
+                "high": {
+                    "range": (55, 80),
+                    "message": "The response stays mostly focused on the main topic."
+                },
+                "awesome": {
+                    "range": (80, 100),
+                    "message": "The response is clearly focused and directly addresses the topic."
+                },
+            },
+
+            "relevant_topic": {  # CrossEncoder-derived signal
+                "low": {
+                    "range": (0, 25),
+                    "message": "The answer is related but does not closely match the expected definition."
+                },
+                "medium": {
+                    "range": (25, 55),
+                    "message": "The answer partially matches the expected idea but is incomplete."
+                },
+                "high": {
+                    "range": (55, 80),
+                    "message": "The answer closely matches the expected idea."
+                },
+                "awesome": {
+                    "range": (80, 100),
+                    "message": "The answer is nearly identical in meaning to the expected definition."
+                },
+            },
+        }
+    
+    def tokenized(self, user_answer):
+        tokens = user_answer.lower().split(' ')
+        for index, each_token in enumerate(tokens):
+            if each_token in self.STOPWORDS:
+                del tokens[index]
+        return {
+            "list_format":tokens,
+            "string_format":" ".join(tokens)
+            }
+
+    def remove_punctuation(self, text):
+        # Create a regex pattern to match any character present in string.punctuation
+        # re.escape is used to escape any special regex characters in the punctuation string
+        pattern = "[" + re.escape(string.punctuation) + "]"
+        # Substitute all matched characters with an empty string
+        cleaned_text = re.sub(pattern, "", text)
+        return cleaned_text
+
+    def gec_nli_process(self, sentence):
+        """
+        Returns the grammatically corrected version of the sentence.
+        """
+        result = _gec(sentence, max_length=128, clean_up_tokenization_spaces=True)
+        return result[0]["generated_text"]
+
+    def sentence_transformers(self, user_answer, official_answer):
+        """
+
+        Args:
+            user_answer (_type_): _description_
+            official_answer (_type_): _description_
+
+        Returns:
+            _type_: float
+            _example_: 0.544444
+        """
+        emb_official = SENT_TRANS_MODEL.encode(official_answer, convert_to_tensor=True)
+        emb_user = SENT_TRANS_MODEL.encode(user_answer, convert_to_tensor=True)
+        score = util.cos_sim(emb_user, emb_official).item()
+        result = round(score * 100)
+        return result
+ 
+            
+
+
+    def keyword_finder_result(self, key_points, user_tokens):
+
+        def normalize(token):
+            return token.lower().strip(string.punctuation)
+        normalized_user_tokens = [normalize(t) for t in user_tokens]
+        normalized_key_points = [normalize(k) for k in key_points]
+
+        if not normalized_key_points:
+            return 0
+
+        matched_keywords = set()
+
+        for each_token in normalized_user_tokens:
+            if each_token in normalized_key_points:
+                matched_keywords.add(each_token)
+
+        result = round(len(matched_keywords) / len(normalized_key_points) * 100)
+        return result
+
+    def grammar_transformer(self, sentence):
+        result = happy_tt.generate_text(sentence, args=beam_settings).text
+        return result
+
+    def similarity_score(self, reference: str, student: str) -> float:
+        ref_vec = SENT_TRANS_MODEL.encode(reference, convert_to_tensor=True, normalize_embeddings=True)
+        stu_vec = SENT_TRANS_MODEL.encode(student, convert_to_tensor=True, normalize_embeddings=True)
+        return round(float(util.cos_sim(ref_vec, stu_vec)[0][0]) * 100)
+    
+    def cross_encoder_similarity(self, reference: str, student: str) -> float:
+        score = float(_CE.predict([(reference, student)])[0])
+        percent = round(min(score / 5.0, 1.0) * 100)
+        return percent
+
+    def extract_key_points(self, official_answer: str, top_n: int = 24):
+        """
+        Automatically extract key phrases from the official answer.
+        Returns a list of phrases suitable for keyword grading.
+        """
+        keywords = _KW.extract_keywords(
+            official_answer,
+            keyphrase_ngram_range=(1, 3),  # unigrams → trigrams
+            stop_words="english",
+            top_n=top_n
+        )
+        keyword_arry = []
+        flattened_list = []
+        for x in keywords:
+            tmp = x[0].split(" ")
+            keyword_arry.append(tmp)  
+        for x in keywords:
+            tmp = x[0].split(" ")
+            keyword_arry.append(tmp)   
+        for sublist in keyword_arry:
+            flattened_list.extend(sublist)
+        flattened = list(set(flattened_list))
+        for index, x in enumerate(flattened):
+            if x in enumerate(flattened):
+                del flattened[index]
+        return flattened
+
+    def interpret_signal(self, score: float, signal_name: str, model: str):
+        for level, data in self.SIGNAL_INTERPRETATION[signal_name].items():
+            low, high = data["range"]
+            if low <= score < high:
+                return {
+                    "model": model,
+                    "level": level,
+                    "message": data["message"]
+                }
+
+    def main(self, user_answer, official_answer):
+        # user_answer = "a coding languge use to develop software and programs" 
+        gec_tool = self.gec_nli_process(user_answer) # returns a string
+        g_tool = self.grammar_transformer(gec_tool) # returns a string
+        tokens = self.tokenized(g_tool) # returns an array of tokens
+        keywords = self.extract_key_points(g_tool) # returns a grade
+        
+        
+        sentence_compare_result = self.sentence_transformers(
+            tokens['string_format'], 
+            official_answer
+        ) 
+        keyword_finder_result = self.keyword_finder_result(
+            keywords, 
+            tokens['list_format']
+        )
+        topic_sent = self.similarity_score(
+            g_tool,
+            official_answer
+        )
+        relevant_topic = self.cross_encoder_similarity(
+            g_tool,
+            official_answer
+        )
+        response = [
+            self.interpret_signal(sentence_compare_result, "sentence_compare", "Answer Comparision"),
+            self.interpret_signal(keyword_finder_result, "keyword_finder", "Terminologies"),
+            self.interpret_signal(topic_sent, "topic_sent", "On Topic"),
+            self.interpret_signal(relevant_topic, "relevant_topic", "Relevance")
+
+        ]
+        return response
+
+
+
 # --- HandLandmarkService import (robust) ---
 # Preferred: a normal python module in this package, e.g. `hand_recognition.py`.
 # Fallback: load from a file on disk (handles odd filenames like `hand recognition.py`).
@@ -1339,85 +1760,62 @@ def gesture_recognition(request):
             }
         }, status=500)
 
+@api_view(['POST', 'GET'])
+@csrf_exempt  
+def upload_flashcard(request): 
+    upload_flashcard = request.data
+    for each_item in upload_flashcard:
+        Flashcard.objects.create(**each_item)
+    return Response("successful") 
+
+@api_view(['POST', 'GET'])
+@csrf_exempt  
+def upload_flashcard(request): 
+    upload_flashcard = request.data
+    for each_item in upload_flashcard:
+        Flashcard.objects.create(**each_item)
+    return Response("successful") 
+
+@api_view(['POST', 'GET'])
+@csrf_exempt  
+def upload_ai_flashcard(request): 
+    upload_flashcard = request.data
+    for each_item in upload_flashcard:
+        AiQuestion.objects.create(**each_item)
+    return Response("successful") 
 
 @csrf_exempt
-@require_POST
-def bulk_upsert_flashcards_array(request):
-    """
-    POST body MUST be a JSON array:
+def ai_flashcard(request):
+    id_ = request.data.get("id", False)
+    user_answer = request.data.get("user_answer", False)
+    if id_ == False:
+        return JsonResponse({"error": "Missing file field 'id'."}, status=400)
+    if user_answer == False:
+        return JsonResponse({"error": "Missing file field 'user_answer'."}, status=400)
+    
+    instantiate_class = NLTK_PROCESSING()
+    result = instantiate_class.main()
+    return JsonResponse({
+        result
+    })
+ 
 
-    [
-      {"course":"python","question":"...","answer":"...","reasoning":"..."},
-      ...
-    ]
-    """
-    # Parse JSON
-    try:
-        raw = request.body.decode("utf-8") if request.body else ""
-        if not raw:
-            return JsonResponse({"error": "Empty request body"}, status=400)
-        flashcards = json.loads(raw)
-    except Exception as e:
-        return JsonResponse({"error": "Invalid JSON", "details": str(e)}, status=400)
-
-    # Validate array
-    if not isinstance(flashcards, list):
-        return JsonResponse({"error": "Body must be a JSON array"}, status=400)
-    if len(flashcards) == 0:
-        return JsonResponse({"error": "Array is empty"}, status=400)
-
-    required = ["course", "question", "answer", "reasoning"]
-
-    created_count = 0
-    updated_count = 0
-    skipped_count = 0
-    errors = []
-
-    for i, card in enumerate(flashcards):
-        if not isinstance(card, dict):
-            skipped_count += 1
-            errors.append({"index": i, "error": "Item must be an object"})
-            continue
-
-        missing = [k for k in required if not card.get(k)]
-        if missing:
-            skipped_count += 1
-            errors.append({"index": i, "error": "Missing fields", "missing": missing})
-            continue
-
-        # Upsert behavior: unique by (course, question)
-        obj, created = Flashcard.objects.get_or_create(
-            course=card["course"],
-            question=card["question"],
-            defaults={
-                "answer": card["answer"],
-                "reasoning": card["reasoning"],
-            },
-        )
-
-        if created:
-            created_count += 1
-        else:
-            changed = False
-            if obj.answer != card["answer"]:
-                obj.answer = card["answer"]
-                changed = True
-            if obj.reasoning != card["reasoning"]:
-                obj.reasoning = card["reasoning"]
-                changed = True
-
-            if changed:
-                obj.save(update_fields=["answer", "reasoning"])
-                updated_count += 1
-
-    return JsonResponse(
-        {
-            "ok": True,
-            "received": len(flashcards),
-            "created": created_count,
-            "updated": updated_count,
-            "skipped": skipped_count,
-            "errors": errors,
-        },
-        status=200,
-    )
+@api_view(['GET', 'POST'])
+@csrf_exempt
+def get_ai_questions(request):
+    result = AiQuestion.objects.all().order_by("?")
+    response = AiQuestionSerializers(result, many=True).data
+    return Response(response)
+ 
+@api_view(['GET', 'POST'])
+@csrf_exempt
+def grade_ai_answers(request):
+    id_ = request.data.get('id', False)
+    user_answer = request.data.get('answer', False)
+    official_answer = AiQuestion.objects.get(id=id_).official_answer 
+    instantiate = PROCESSING()
+    ai_grade_check = instantiate.main(user_answer, official_answer)
+    return Response({
+        "grade_check":ai_grade_check,
+        "answer":official_answer
+        })

@@ -183,6 +183,24 @@ class Flashcard(models.Model):
     def __str__(self):
         return f"{self.course} - {self.question}"
 
+
+class AiQuestion(models.Model):
+    language = models.TextField()
+    question = models.TextField()
+    official_answer = models.TextField()
+    require_keypoints = models.PositiveIntegerField(
+        default=1,
+        help_text="Minimum number of required keypoints to pass"
+    )
+    pass_score = models.FloatField(
+        default=0.45,
+        help_text="Similarity score required to pass"
+    )
+    def __str__(self):
+        return f"[{self.language}] {self.question[:50]}"
+
+     
+     
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_auth_token(sender, instance=None, created=False, **kwargs):
     if created:
