@@ -21,6 +21,5 @@ urlpatterns = [
     path("upload_flashcard", upload_flashcard, name="upload_flashcard"),
     path("upload_ai_flashcard", upload_ai_flashcard, name="upload_ai_flashcard"),
     path("get_ai_questions", get_ai_questions, name="get_ai_questions"),
-    
 ]
       
