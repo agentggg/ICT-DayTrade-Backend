@@ -136,3 +136,109 @@ def find_order_blocks(
         })
 
     return matches
+
+
+    # ============================================================
+# View helpers (keep views.py thin)
+# ============================================================
+# NOTE:
+# - Imports are intentionally inside functions where possible to avoid heavy
+#   import costs and to prevent circular import issues.
+
+import threading
+from typing import Dict
+
+# MediaPipe GestureRecognizer is not guaranteed thread-safe.
+# We source the shared lock from ml_services so all call sites coordinate.
+try:
+    from .ml_services import mp_gesture_lock as _MP_GESTURE_LOCK
+except Exception:
+    _MP_GESTURE_LOCK = threading.Lock()
+
+GESTURE_LOCK = _MP_GESTURE_LOCK
+
+
+def get_gesture_recognizer():
+    """Return a cached MediaPipe GestureRecognizer (IMAGE mode)."""
+    # Cached instance is owned by ml_services; we simply access it here.
+    from .ml_services import get_mp_gesture_recognizer_image
+    return get_mp_gesture_recognizer_image()
+
+
+# -----------------------------
+# YOLO model cache
+# -----------------------------
+_YOLO_X_MODEL = None
+_YOLO_X_LOCK = threading.Lock()
+
+
+def get_model():
+    """Cached YOLO model loader (yolov8x.pt)."""
+    global _YOLO_X_MODEL
+    if _YOLO_X_MODEL is None:
+        with _YOLO_X_LOCK:
+            if _YOLO_X_MODEL is None:
+                from ultralytics import YOLO
+                _YOLO_X_MODEL = YOLO("yolov8x.pt")
+    return _YOLO_X_MODEL
+
+
+# -----------------------------
+# Small numeric / detection helpers
+# -----------------------------
+def clamp(v, lo, hi):
+    try:
+        v = float(v)
+    except Exception:
+        return lo
+    return max(lo, min(hi, v))
+
+
+def safe_int(v, default):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def normalize_label(s: str) -> str:
+    return (s or "").strip().lower()
+
+
+def xyxy_to_norm_xyxy(xyxy, w, h) -> Dict[str, float]:
+    x1, y1, x2, y2 = [float(x) for x in xyxy]
+    x1 = max(0.0, min(x1, w - 1))
+    x2 = max(0.0, min(x2, w - 1))
+    y1 = max(0.0, min(y1, h - 1))
+    y2 = max(0.0, min(y2, h - 1))
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+    return {"x1": x1 / w, "y1": y1 / h, "x2": x2 / w, "y2": y2 / h}
+
+
+def iou(a: Dict[str, float], b: Dict[str, float]) -> float:
+    ax1, ay1, ax2, ay2 = a["x1"], a["y1"], a["x2"], a["y2"]
+    bx1, by1, bx2, by2 = b["x1"], b["y1"], b["x2"], b["y2"]
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = (area_a + area_b - inter)
+    return float(inter / union) if union > 0 else 0.0
+
+
+def nms(dets, iou_thresh: float = 0.50):
+    """Non-max suppression for a list of det dicts with keys: box, score."""
+    dets = sorted(dets, key=lambda d: d.get("score", 0.0), reverse=True)
+    keep = []
+    for d in dets:
+        if any(iou(d["box"], k["box"]) >= iou_thresh for k in keep):
+            continue
+        keep.append(d)
+    return keep

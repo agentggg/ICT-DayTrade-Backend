@@ -1,17 +1,52 @@
-from datetime import datetime, date, timedelta, timezone
-from collections import Counter
-import random
+# ============================================================
+# Environment (must be FIRST)
+# ============================================================
+import os
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# ============================================================
+# Standard Library
+# ============================================================
+import base64
+import binascii
+import io
 import json
 import logging
 import threading
-import re
-import pprint
-import copy
 import time
-import base64
-import io
-import os
+import random
+import copy
+import pprint
+import re
+import string
+from datetime import datetime, date, timedelta, timezone
+from collections import Counter
+from pathlib import Path
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, Optional, Tuple
 
+# ============================================================
+# Third-Party Libraries
+# ============================================================
+import requests
+import numpy as np
+from PIL import Image
+import cv2
+
+try:
+    import mediapipe as mp
+except Exception:
+    mp = None
+
+try:
+    import face_recognition
+except Exception:
+    face_recognition = None
+
+# ============================================================
+# Django
+# ============================================================
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import send_mail
 from django.db import IntegrityError, transaction as db_transaction
@@ -19,586 +54,44 @@ from django.db.models import F, Value, CharField
 from django.db.models.functions import Concat
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render, get_object_or_404
+from django.utils import timezone as dj_timezone
+from django.utils.html import escape
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import TemplateView
-from django.conf import settings
-from django.utils.timezone import now
-
 from django.contrib.auth.models import User
+
+# ============================================================
+# Django REST Framework
+# ============================================================
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.authtoken.views import ObtainAuthToken
+from rest_framework.authtoken.models import Token
 
-from .models import *
+# ============================================================
+# Local App Imports (NO wildcard imports)
+# ============================================================
+from .models import * 
 from .serializers import *
 from .utils import *
 
-import requests
-from django.utils.html import escape
-
-import numpy as np
-from PIL import Image
-
-import face_recognition
-from ultralytics import YOLO
-
-import cv2
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
-from pathlib import Path
-
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional, Tuple
-from pathlib import Path
-import threading
-from django.conf import settings
-
-
-import re
-import string
-from nltk.stem import PorterStemmer
-from spellchecker import SpellChecker
-from sentence_transformers import SentenceTransformer, util, CrossEncoder
-import torch
-from transformers import pipeline
-from happytransformer import  HappyTextToText, TTSettings
-happy_tt = HappyTextToText("T5", "vennify/t5-base-grammar-correction")
-beam_settings =  TTSettings(min_length=1) # https://happytransformer.com/text-to-text/settings/?ref=vennify.ai
-import os
-from keybert import KeyBERT
-import numpy as np
-
-
-
-
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-_gec = pipeline(
-    "text2text-generation",
-    model="prithivida/grammar_error_correcter_v1"
+# ============================================================
+# NLP / AI 
+# ============================================================
+from .rule_ai import Processing
+from .ml_services import (
+    decode_b64_jpeg_to_bgr,
+    bgr_to_mp_image,
 )
 
-STEMMER = PorterStemmer()
-SPELL = SpellChecker()
-SENT_TRANS_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-PIPE = pipeline(model="FacebookAI/roberta-large-mnli")
-_CE = CrossEncoder("cross-encoder/stsb-roberta-base")
-_KW = KeyBERT(model=SENT_TRANS_MODEL)
+# MediaPipe recognizers are not guaranteed thread-safe; serialize inference.
+GESTURE_LOCK = threading.Lock()
 
-class PROCESSING():
-    def __init__(self):
-        self.STOPWORDS = [
-            "a","about","above","after","again","against","all","am","an","and","any","are",
-            "aren't","as","at","be","because","been","before","being","below","between","both",
-            "but","by","can","cannot","could","couldn't","did","didn't","do","does","doesn't",
-            "doing","don't","down","during","each","few","for","from","further","had","hadn't",
-            "has","hasn't","have","haven't","having","he","he'd","he'll","he's","her","here",
-            "here's","hers","herself","him","himself","his","how","how's","i","i'd","i'll",
-            "i'm","i've","if","in","into","is","isn't","it","it's","its","itself","let's","me",
-            "more","most","mustn't","my","myself","no","nor","not","of","off","on","once","only",
-            "or","other","ought","our","ours","ourselves","out","over","own","same","shan't",
-            "she","she'd","she'll","she's","should","shouldn't","so","some","such","than","that",
-            "that's","the","their","theirs","them","themselves","then","there","there's","these",
-            "they","they'd","they'll","they're","they've","this","those","through","to","too",
-            "under","until","up","very","was","wasn't","we","we'd","we'll","we're","we've",
-            "were","weren't","what","what's","when","when's","where","where's","which","while",
-            "who","who's","whom","why","why's","with","won't","would","wouldn't","you","you'd",
-            "you'll","you're","you've","your","yours","yourself","yourselves"
-        ]
-        self.CONTRACTION_WORD = [
-            "ain't","aren't","can't","can't've","could've","couldn't","couldn't've",
-            "didn't","doesn't","don't","hadn't","hadn't've","hasn't","haven't","he'd",
-            "he'd've","he'll","he'll've","he's","how'd","how'd'y","how'll","how's",
-            "i'd","i'd've","i'll","i'll've","i'm","i've","isn't","it'd","it'd've",
-            "it'll","it'll've","it's","let's","ma'am","mayn't","might've","mightn't",
-            "mightn't've","must've","mustn't","mustn't've","needn't","needn't've",
-            "o'clock","oughtn't","oughtn't've","shan't","shan't've","she'd","she'd've",
-            "she'll","she'll've","she's","should've","shouldn't","shouldn't've",
-            "so've","so's","that'd","that'd've","that's","there'd","there'd've",
-            "there's","they'd","they'd've","they'll","they'll've","they're","they've",
-            "to've","wasn't","we'd","we'd've","we'll","we'll've","we're","we've",
-            "weren't","what'll","what'll've","what're","what's","what've","when's",
-            "when've","where'd","where's","where've","who'll","who'll've","who's",
-            "who've","why's","why've","will've","won't","won't've","would've",
-            "wouldn't","wouldn't've","y'all","y'all'd","y'all'd've","y'all're",
-            "y'all've","you'd","you'd've","you'll","you'll've","you're","you've"
-        ]
-        self.CONTRACTION_MAP = {
-            "ain't": "am not",
-            "aren't": "are not",
-            "can't": "cannot",
-            "can't've": "cannot have",
-            "could've": "could have",
-            "couldn't": "could not",
-            "couldn't've": "could not have",
-            "didn't": "did not",
-            "doesn't": "does not",
-            "don't": "do not",
-            "hadn't": "had not",
-            "hadn't've": "had not have",
-            "hasn't": "has not",
-            "haven't": "have not",
-            "he'd": "he would",
-            "he'd've": "he would have",
-            "he'll": "he will",
-            "he'll've": "he will have",
-            "he's": "he is",
-            "how'd": "how did",
-            "how'd'y": "how do you",
-            "how'll": "how will",
-            "how's": "how is",
-            "i'd": "i would",
-            "i'd've": "i would have",
-            "i'll": "i will",
-            "i'll've": "i will have",
-            "i'm": "i am",
-            "i've": "i have",
-            "isn't": "is not",
-            "it'd": "it would",
-            "it'd've": "it would have",
-            "it'll": "it will",
-            "it'll've": "it will have",
-            "it's": "it is",
-            "let's": "let us",
-            "ma'am": "madam",
-            "mayn't": "may not",
-            "might've": "might have",
-            "mightn't": "might not",
-            "mightn't've": "might not have",
-            "must've": "must have",
-            "mustn't": "must not",
-            "mustn't've": "must not have",
-            "needn't": "need not",
-            "needn't've": "need not have",
-            "o'clock": "of the clock",
-            "oughtn't": "ought not",
-            "oughtn't've": "ought not have",
-            "shan't": "shall not",
-            "shan't've": "shall not have",
-            "she'd": "she would",
-            "she'd've": "she would have",
-            "she'll": "she will",
-            "she'll've": "she will have",
-            "she's": "she is",
-            "should've": "should have",
-            "shouldn't": "should not",
-            "shouldn't've": "should not have",
-            "so've": "so have",
-            "so's": "so is",
-            "that'd": "that would",
-            "that'd've": "that would have",
-            "that's": "that is",
-            "there'd": "there would",
-            "there'd've": "there would have",
-            "there's": "there is",
-            "they'd": "they would",
-            "they'd've": "they would have",
-            "they'll": "they will",
-            "they'll've": "they will have",
-            "they're": "they are",
-            "they've": "they have",
-            "to've": "to have",
-            "wasn't": "was not",
-            "we'd": "we would",
-            "we'd've": "we would have",
-            "we'll": "we will",
-            "we'll've": "we will have",
-            "we're": "we are",
-            "we've": "we have",
-            "weren't": "were not",
-            "what'll": "what will",
-            "what'll've": "what will have",
-            "what're": "what are",
-            "what's": "what is",
-            "what've": "what have",
-            "when's": "when is",
-            "when've": "when have",
-            "where'd": "where did",
-            "where's": "where is",
-            "where've": "where have",
-            "who'll": "who will",
-            "who'll've": "who will have",
-            "who's": "who is",
-            "who've": "who have",
-            "why's": "why is",
-            "why've": "why have",
-            "will've": "will have",
-            "won't": "will not",
-            "won't've": "will not have",
-            "would've": "would have",
-            "wouldn't": "would not",
-            "wouldn't've": "would not have",
-            "y'all": "you all",
-            "y'all'd": "you all would",
-            "y'all'd've": "you all would have",
-            "y'all're": "you all are",
-            "y'all've": "you all have",
-            "you'd": "you would",
-            "you'd've": "you would have",
-            "you'll": "you will",
-            "you'll've": "you will have",
-            "you're": "you are",
-            "you've": "you have"
-        }
-        self.DEMO_DATA = {
-            "question": "What is Python?",
-            "official_answer": "Python is a high-level, interpreted programming language used to build software, automate tasks, and develop applications.",
-            "require_keypoints": 1,
-            "pass_score": 0.45
-        }
-        self.SIGNAL_INTERPRETATION = {
-            "sentence_compare": {
-                "low": {
-                    "range": (0, 30),
-                    "message": "The meaning does not strongly align with the expected answer."
-                },
-                "medium": {
-                    "range": (30, 55),
-                    "message": "The answer is somewhat related, but key ideas are missing or unclear."
-                },
-                "high": {
-                    "range": (55, 80),
-                    "message": "The answer captures most of the intended meaning."
-                },
-                "awesome": {
-                    "range": (80, 100),
-                    "message": "The answer matches the expected meaning very well."
-                },
-            },
-
-            "keyword_finder": {
-                "low": {
-                    "range": (0, 40),
-                    "message": "Key terms were mostly missing."
-                },
-                "medium": {
-                    "range": (40, 70),
-                    "message": "Some important keywords were used, but coverage is incomplete."
-                },
-                "high": {
-                    "range": (70, 90),
-                    "message": "Most of the important keywords were used correctly."
-                },
-                "awesome": {
-                    "range": (90, 101),
-                    "message": "Excellent keyword usage with strong coverage of key concepts."
-                },
-            },
-
-            "topic_sent": {
-                "low": {
-                    "range": (0, 30),
-                    "message": "The response does not stay focused on the main topic."
-                },
-                "medium": {
-                    "range": (30, 55),
-                    "message": "The response is on topic but lacks clarity or precision."
-                },
-                "high": {
-                    "range": (55, 80),
-                    "message": "The response stays mostly focused on the main topic."
-                },
-                "awesome": {
-                    "range": (80, 100),
-                    "message": "The response is clearly focused and directly addresses the topic."
-                },
-            },
-
-            "relevant_topic": {  # CrossEncoder-derived signal
-                "low": {
-                    "range": (0, 25),
-                    "message": "The answer is related but does not closely match the expected definition."
-                },
-                "medium": {
-                    "range": (25, 55),
-                    "message": "The answer partially matches the expected idea but is incomplete."
-                },
-                "high": {
-                    "range": (55, 80),
-                    "message": "The answer closely matches the expected idea."
-                },
-                "awesome": {
-                    "range": (80, 100),
-                    "message": "The answer is nearly identical in meaning to the expected definition."
-                },
-            },
-        }
-    
-    def tokenized(self, user_answer):
-        tokens = user_answer.lower().split(' ')
-        for index, each_token in enumerate(tokens):
-            if each_token in self.STOPWORDS:
-                del tokens[index]
-        return {
-            "list_format":tokens,
-            "string_format":" ".join(tokens)
-            }
-
-    def remove_punctuation(self, text):
-        # Create a regex pattern to match any character present in string.punctuation
-        # re.escape is used to escape any special regex characters in the punctuation string
-        pattern = "[" + re.escape(string.punctuation) + "]"
-        # Substitute all matched characters with an empty string
-        cleaned_text = re.sub(pattern, "", text)
-        return cleaned_text
-
-    def gec_nli_process(self, sentence):
-        """
-        Returns the grammatically corrected version of the sentence.
-        """
-        result = _gec(sentence, max_length=128, clean_up_tokenization_spaces=True)
-        return result[0]["generated_text"]
-
-    def sentence_transformers(self, user_answer, official_answer):
-        """
-
-        Args:
-            user_answer (_type_): _description_
-            official_answer (_type_): _description_
-
-        Returns:
-            _type_: float
-            _example_: 0.544444
-        """
-        emb_official = SENT_TRANS_MODEL.encode(official_answer, convert_to_tensor=True)
-        emb_user = SENT_TRANS_MODEL.encode(user_answer, convert_to_tensor=True)
-        score = util.cos_sim(emb_user, emb_official).item()
-        result = round(score * 100)
-        return result
- 
-            
-
-
-    def keyword_finder_result(self, key_points, user_tokens):
-
-        def normalize(token):
-            return token.lower().strip(string.punctuation)
-        normalized_user_tokens = [normalize(t) for t in user_tokens]
-        normalized_key_points = [normalize(k) for k in key_points]
-
-        if not normalized_key_points:
-            return 0
-
-        matched_keywords = set()
-
-        for each_token in normalized_user_tokens:
-            if each_token in normalized_key_points:
-                matched_keywords.add(each_token)
-
-        result = round(len(matched_keywords) / len(normalized_key_points) * 100)
-        return result
-
-    def grammar_transformer(self, sentence):
-        result = happy_tt.generate_text(sentence, args=beam_settings).text
-        return result
-
-    def similarity_score(self, reference: str, student: str) -> float:
-        ref_vec = SENT_TRANS_MODEL.encode(reference, convert_to_tensor=True, normalize_embeddings=True)
-        stu_vec = SENT_TRANS_MODEL.encode(student, convert_to_tensor=True, normalize_embeddings=True)
-        return round(float(util.cos_sim(ref_vec, stu_vec)[0][0]) * 100)
-    
-    def cross_encoder_similarity(self, reference: str, student: str) -> float:
-        score = float(_CE.predict([(reference, student)])[0])
-        percent = round(min(score / 5.0, 1.0) * 100)
-        return percent
-
-    def extract_key_points(self, official_answer: str, top_n: int = 24):
-        """
-        Automatically extract key phrases from the official answer.
-        Returns a list of phrases suitable for keyword grading.
-        """
-        keywords = _KW.extract_keywords(
-            official_answer,
-            keyphrase_ngram_range=(1, 3),  # unigrams → trigrams
-            stop_words="english",
-            top_n=top_n
-        )
-        keyword_arry = []
-        flattened_list = []
-        for x in keywords:
-            tmp = x[0].split(" ")
-            keyword_arry.append(tmp)  
-        for x in keywords:
-            tmp = x[0].split(" ")
-            keyword_arry.append(tmp)   
-        for sublist in keyword_arry:
-            flattened_list.extend(sublist)
-        flattened = list(set(flattened_list))
-        for index, x in enumerate(flattened):
-            if x in enumerate(flattened):
-                del flattened[index]
-        return flattened
-
-    def interpret_signal(self, score: float, signal_name: str, model: str):
-        for level, data in self.SIGNAL_INTERPRETATION[signal_name].items():
-            low, high = data["range"]
-            if low <= score < high:
-                return {
-                    "model": model,
-                    "level": level,
-                    "message": data["message"]
-                }
-
-    def main(self, user_answer, official_answer):
-        # user_answer = "a coding languge use to develop software and programs" 
-        gec_tool = self.gec_nli_process(user_answer) # returns a string
-        g_tool = self.grammar_transformer(gec_tool) # returns a string
-        tokens = self.tokenized(g_tool) # returns an array of tokens
-        keywords = self.extract_key_points(g_tool) # returns a grade
-        
-        
-        sentence_compare_result = self.sentence_transformers(
-            tokens['string_format'], 
-            official_answer
-        ) 
-        keyword_finder_result = self.keyword_finder_result(
-            keywords, 
-            tokens['list_format']
-        )
-        topic_sent = self.similarity_score(
-            g_tool,
-            official_answer
-        )
-        relevant_topic = self.cross_encoder_similarity(
-            g_tool,
-            official_answer
-        )
-        response = [
-            self.interpret_signal(sentence_compare_result, "sentence_compare", "Answer Comparision"),
-            self.interpret_signal(keyword_finder_result, "keyword_finder", "Terminologies"),
-            self.interpret_signal(topic_sent, "topic_sent", "On Topic"),
-            self.interpret_signal(relevant_topic, "relevant_topic", "Relevance")
-
-        ]
-        return response
-
-
-
-# --- HandLandmarkService import (robust) ---
-# Preferred: a normal python module in this package, e.g. `hand_recognition.py`.
-# Fallback: load from a file on disk (handles odd filenames like `hand recognition.py`).
-try:
-    from .hand_recognition import HandLandmarkService  # type: ignore
-except Exception:
-    try:
-        # Alternate module name some projects use
-        from .hand_landmarker_service import HandLandmarkService  # type: ignore
-    except Exception:
-        import importlib.util
-
-        _api_dir = Path(__file__).resolve().parent
-        _candidates = [
-            _api_dir / "hand_recognition.py",
-            _api_dir / "hand recognition.py",
-            _api_dir / "hand_landmarker_service.py",
-            _api_dir / "hand_landmarker.py",
-        ]
-
-        _loaded = False
-        _last_err: Optional[Exception] = None
-
-        for _path in _candidates:
-            if not _path.exists():
-                continue
-            try:
-                _spec = importlib.util.spec_from_file_location("ict.api.hand_landmark_fallback", str(_path))
-                if _spec is None or _spec.loader is None:
-                    continue
-                _mod = importlib.util.module_from_spec(_spec)
-                _spec.loader.exec_module(_mod)  # type: ignore
-                HandLandmarkService = getattr(_mod, "HandLandmarkService")
-                _loaded = True
-                break
-            except Exception as _e:
-                _last_err = _e
-
-        if not _loaded:
-            existing = [str(p.name) for p in _candidates if p.exists()]
-            hint = (
-                "Could not import HandLandmarkService. Django tried to import: `ict.api.hand_recognition`, "
-                "but that module file does not exist.\n\n"
-                "Fix (recommended): rename your file to `hand_recognition.py` and keep it in `Backend/ict/api/`.\n"
-                "Also ensure `Backend/ict/api/__init__.py` exists so Python treats it as a package.\n\n"
-                f"Searched for these files in {str(_api_dir)}:\n- " + "\n- ".join([p.name for p in _candidates]) + "\n\n"
-                f"Files that actually exist from that list: {existing or 'NONE'}"
-            )
-            if _last_err:
-                raise ImportError(hint + f"\n\nLast loader error: {_last_err}")
-            raise ImportError(hint)
-
-# --- GestureRecognizerService (inline; removes need for gesture_recognizer_service.py) ---
-class GestureRecognizerService:
-    """Thin wrapper around MediaPipe Tasks GestureRecognizer (.task) for IMAGE inference."""
-
-    def __init__(self, model_asset_path: str):
-        if not os.path.isfile(model_asset_path):
-            raise FileNotFoundError(f"Missing gesture model: {model_asset_path}")
-
-        GestureRecognizer = mp.tasks.vision.GestureRecognizer
-        GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
-        RunningMode = mp.tasks.vision.RunningMode
-        BaseOptions = mp.tasks.BaseOptions
-
-        options = GestureRecognizerOptions(
-            base_options=BaseOptions(model_asset_path=model_asset_path),
-            running_mode=RunningMode.IMAGE,
-        )
-        self._recognizer = GestureRecognizer.create_from_options(options)
-        self._lock = threading.Lock()
-
-    def process_bgr(self, img_bgr: np.ndarray) -> Dict[str, Any]:
-        if img_bgr is None or img_bgr.size == 0:
-            return {"gestures": [], "handedness": []}
-
-        rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-
-        with self._lock:
-            result = self._recognizer.recognize(mp_image)
-
-        gestures_out: list[dict] = []
-        if getattr(result, "gestures", None) and result.gestures and len(result.gestures[0]) > 0:
-            for g in result.gestures[0]:
-                gestures_out.append({"name": g.category_name, "score": float(g.score or 0.0)})
-
-        handed_out: list[dict] = []
-        if getattr(result, "handedness", None) and result.handedness and len(result.handedness[0]) > 0:
-            for h in result.handedness[0]:
-                handed_out.append({"name": h.category_name, "score": float(h.score or 0.0)})
-
-        return {"gestures": gestures_out, "handedness": handed_out}
-
-
-_SERVICES_LOCK = threading.Lock()
-_SERVICES = None
-
-def get_hand_services():
-    """
-    Returns:
-      services["landmarker"] -> HandLandmarkService
-      services["gesture"]    -> GestureRecognizerService
-    """
-    global _SERVICES
-    if _SERVICES is not None:
-        return _SERVICES
-
-    with _SERVICES_LOCK:
-        if _SERVICES is not None:
-            return _SERVICES
-
-        base = Path(settings.BASE_DIR) / "model"
-        landmarker_path = str(base / "hand_landmarker.task")
-        gesture_path = str(base / "gesture_recognizer.task")
-
-        _SERVICES = {
-            "landmarker": HandLandmarkService(model_asset_path=landmarker_path),
-            "gesture": GestureRecognizerService(model_asset_path=gesture_path),
-        }
-        return _SERVICES
-
+# MediaPipe object detector singleton + lock
+_DETECTOR = None
+_DETECTOR_LOCK = threading.Lock()
 
 # --------------------------------------------------------------------------
 # Endpoint: hand_landmarks (returns landmarks and fingertips via landmarker)
@@ -618,7 +111,7 @@ def hand_landmarks(request):
     try:
         payload = json.loads(request.body.decode("utf-8"))
         image_b64 = payload["image"]["data_b64"]
-        img_bgr = _decode_b64_jpeg(image_b64)
+        img_bgr = decode_b64_jpeg_to_bgr(image_b64)
 
         services = get_hand_services()
         landmarker = services["landmarker"]
@@ -645,164 +138,6 @@ def hand_landmarks(request):
             "ok": False,
             "error": {"code": "SERVER_ERROR", "message": str(e)}
         }, status=500)
-_DETECTOR = None
-# ------------------------------------------------------------------------------
-# YOLO (object detection) - keep your existing singleton if you want
-# ------------------------------------------------------------------------------
-YOLO_MODEL = YOLO("yolov8n.pt")  # process-level singleton
-
-# ------------------------------------------------------------------------------
-# MediaPipe Models (Object + Gesture)
-# ------------------------------------------------------------------------------
-MP_MODEL_DIR = Path(settings.BASE_DIR) / "model"
-
-# EfficientDet object detector bundle
-MP_OBJECT_MODEL_PATH = str(MP_MODEL_DIR / "efficientdet_lite2.tflite")
-
-# Gesture recognizer task bundle
-MP_GESTURE_MODEL_PATH = str(MP_MODEL_DIR / "gesture_recognizer.task")
-
-# Monotonic baseline for VIDEO timestamps (object detector)
-START_TIME = time.monotonic()
-
-# ---- Object detector: create ONE instance (VIDEO mode) ----
-ObjectDetector = mp.tasks.vision.ObjectDetector
-ObjectDetectorOptions = mp.tasks.vision.ObjectDetectorOptions
-RunningMode = mp.tasks.vision.RunningMode
-BaseOptions = mp.tasks.BaseOptions
-
-_DETECTOR_LOCK = threading.Lock()
-
-_DETECTOR_OPTIONS = ObjectDetectorOptions(
-    base_options=BaseOptions(model_asset_path=MP_OBJECT_MODEL_PATH),
-    running_mode=RunningMode.VIDEO,
-    max_results=5,
-    score_threshold=0.30,
-)
-
-DETECTOR_INSTANCE = ObjectDetector.create_from_options(_DETECTOR_OPTIONS)
-
-# ---- Gesture recognizer: lazy singleton (IMAGE mode) ----
-GestureRecognizer = mp.tasks.vision.GestureRecognizer
-GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
-GestureRunningMode = mp.tasks.vision.RunningMode
-
-_GESTURE_LOCK = threading.Lock()
-_GESTURE = None
-
-
-def get_gesture_recognizer():
-    """Return a cached MediaPipe GestureRecognizer (IMAGE mode)."""
-#    global _GESTURE
-#    if _GESTURE is not None:
-#        return _GESTURE
-#
-#    with _GESTURE_LOCK:
-#        if _GESTURE is not None:
-#            return _GESTURE
-#
-#        if not os.path.isfile(MP_GESTURE_MODEL_PATH):
-#            raise FileNotFoundError(f"Missing gesture model: {MP_GESTURE_MODEL_PATH}")
-#
-#        options = GestureRecognizerOptions(
-#            base_options=BaseOptions(model_asset_path=MP_GESTURE_MODEL_PATH),
-#            running_mode=GestureRunningMode.IMAGE,
-#        )
-#
-#        _GESTURE = GestureRecognizer.create_from_options(options)
-#        return _GESTURE
-    global _GESTURE
-    if _GESTURE is not None:
-        return _GESTURE
-
-    with _GESTURE_LOCK:
-        if _GESTURE is not None:
-            return _GESTURE
-
-        if not os.path.isfile(MP_GESTURE_MODEL_PATH):
-            raise FileNotFoundError(f"Missing gesture model: {MP_GESTURE_MODEL_PATH}")
-
-        options = GestureRecognizerOptions(
-            base_options=BaseOptions(model_asset_path=MP_GESTURE_MODEL_PATH),
-            running_mode=GestureRunningMode.IMAGE,
-        )
-
-        _GESTURE = GestureRecognizer.create_from_options(options)
-        return _GESTURE
-
-
-# ------------------------------------------------------------------------------
-# YOLO helper (fixed: no missing globals)
-# ------------------------------------------------------------------------------
-_YOLO_X_MODEL = None
-_YOLO_X_LOCK = threading.Lock()
-
-def get_model():
-    """
-    Cached YOLO model loader (yolov8x.pt).
-    """
-    global _YOLO_X_MODEL
-    if _YOLO_X_MODEL is None:
-        with _YOLO_X_LOCK:
-            if _YOLO_X_MODEL is None:
-                _YOLO_X_MODEL = YOLO("yolov8x.pt")
-    return _YOLO_X_MODEL
-
-
-def _clamp(v, lo, hi):
-    try:
-        v = float(v)
-    except Exception:
-        return lo
-    return max(lo, min(hi, v))
-
-
-def _safe_int(v, default):
-    try:
-        return int(v)
-    except Exception:
-        return default
-
-
-def _normalize_label(s: str) -> str:
-    return (s or "").strip().lower()
-
-
-def _xyxy_to_norm_xyxy(xyxy, w, h):
-    x1, y1, x2, y2 = [float(x) for x in xyxy]
-    x1 = max(0.0, min(x1, w - 1))
-    x2 = max(0.0, min(x2, w - 1))
-    y1 = max(0.0, min(y1, h - 1))
-    y2 = max(0.0, min(y2, h - 1))
-    if x2 < x1: x1, x2 = x2, x1
-    if y2 < y1: y1, y2 = y2, y1
-    return {"x1": x1 / w, "y1": y1 / h, "x2": x2 / w, "y2": y2 / h}
-
-
-def _iou(a, b):
-    ax1, ay1, ax2, ay2 = a["x1"], a["y1"], a["x2"], a["y2"]
-    bx1, by1, bx2, by2 = b["x1"], b["y1"], b["x2"], b["y2"]
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
-    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
-    union = (area_a + area_b - inter)
-    return float(inter / union) if union > 0 else 0.0
-
-
-def _nms(dets, iou_thresh=0.50):
-    dets = sorted(dets, key=lambda d: d["score"], reverse=True)
-    keep = []
-    for d in dets:
-        if any(_iou(d["box"], k["box"]) >= iou_thresh for k in keep):
-            continue
-        keep.append(d)
-    return keep
-
 
 @csrf_exempt
 def hand_recognition(request):
@@ -912,13 +247,12 @@ def hand_recognition(request):
     # -----------------------------
     # Run MediaPipe gesture recognizer
     # -----------------------------
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    mp_image = bgr_to_mp_image(bgr)
 
     try:
         recognizer = get_gesture_recognizer()
         # recognizer is not documented as thread-safe; lock during inference
-        with _GESTURE_LOCK:
+        with GESTURE_LOCK:
             # If the caller provided a timestamp, prefer VIDEO inference.
             # Otherwise fall back to IMAGE inference.
             if ts_client_ms is not None:
@@ -1052,6 +386,8 @@ class FacialRecognitionTool:
         return (known_names[idx], dist) if dist <= self.TOLERANCE else ("Unknown", dist)
 
     def recognize_from_upload(self, uploaded_file):
+        if face_recognition is None:
+            return {"recognized": False, "name": "Unknown", "distance": 999.0, "error": "face_recognition not installed"}
         frame = self._decode_uploaded_image(uploaded_file)
         if frame is None:
             return {"recognized": False, "name": "Unknown", "distance": 999.0, "error": "Invalid image"}
@@ -1106,7 +442,7 @@ def recognize(request):
         "recognized": bool(result["recognized"]),
         "name": result["name"],
         "distance": float(result["distance"]),
-        "timestamp": now().isoformat(),
+        "timestamp": dj_timezone.now().isoformat(),
     })
 
 
@@ -1136,27 +472,10 @@ def enroll(request):
         "enrolled": True,
         "name": out["name"],
         "samples_total": out["samples_total"],
-        "timestamp": now().isoformat(),
+        "timestamp": dj_timezone.now().isoformat(),
     })
 
 
-def decode_b64_jpeg_to_bgr(data_b64: str) -> np.ndarray:
-    """
-    Supports either pure base64 or data URL format.
-    Returns OpenCV BGR image.
-    """
-    if not data_b64:
-        raise ValueError("Missing base64 data")
-
-    if "base64," in data_b64:
-        data_b64 = data_b64.split("base64,", 1)[1]
-
-    raw = base64.b64decode(data_b64, validate=False)
-    arr = np.frombuffer(raw, dtype=np.uint8)
-    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise ValueError("Invalid JPEG (cv2.imdecode returned None)")
-    return bgr
 
 
 def to_contract_objects(detection_result, w: int, h: int):
@@ -1478,47 +797,8 @@ def predict(request):
     return JsonResponse({"detections": detections})
 
 
-import base64
-import binascii
-import cv2
-import numpy as np
 
 
-def _decode_b64_jpeg(b64: str) -> np.ndarray:
-    """
-    Decode a base64-encoded JPEG into an OpenCV BGR image.
-
-    Accepts:
-      - raw base64 (no prefix)
-      - data URLs like: data:image/jpeg;base64,...
-
-    Returns:
-      - np.ndarray (BGR image)
-
-    Raises:
-      - ValueError with a clear message if decoding fails
-    """
-    if not b64 or not isinstance(b64, str):
-        raise ValueError("image.data_b64 missing or invalid")
-
-    # Strip data URL prefix if present
-    if "," in b64 and b64.strip().lower().startswith("data:"):
-        b64 = b64.split(",", 1)[1]
-
-    try:
-        img_bytes = base64.b64decode(b64, validate=True)
-    except (binascii.Error, ValueError) as e:
-        raise ValueError("Invalid base64 image data") from e
-
-    np_buf = np.frombuffer(img_bytes, dtype=np.uint8)
-    img = cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
-
-    if img is None:
-        raise ValueError("Failed to decode JPEG (cv2.imdecode returned None)")
-
-    return img
-
-# -----------------------------
 def decode_image(uploaded_file):
     data = uploaded_file.read()
     arr = np.frombuffer(data, np.uint8)
@@ -1535,9 +815,23 @@ def _err(status: int, code: str, message: str, extra: Optional[Dict[str, Any]] =
 
 
 def _get_detector():
+    """Lazy-create and cache the MediaPipe ObjectDetector singleton.
+
+    NOTE: Do NOT recurse. Use double-checked locking.
+    """
     global _DETECTOR
+
     if _DETECTOR is not None:
         return _DETECTOR
+
+    # If MediaPipe task symbols are not available, fail with a clear error.
+    required = ("ObjectDetectorOptions", "BaseOptions", "RunningMode", "ObjectDetector", "MP_OBJECT_MODEL_PATH")
+    missing = [name for name in required if name not in globals()]
+    if missing:
+        raise FileNotFoundError(
+            "MediaPipe ObjectDetector is not configured (missing symbols: %s). "
+            "Ensure mediapipe tasks imports and MP_OBJECT_MODEL_PATH are defined." % ", ".join(missing)
+        )
 
     with _DETECTOR_LOCK:
         if _DETECTOR is not None:
@@ -1545,7 +839,7 @@ def _get_detector():
 
         options = ObjectDetectorOptions(
             base_options=BaseOptions(model_asset_path=MP_OBJECT_MODEL_PATH),
-            running_mode=RunningMode.IMAGE,   # IMPORTANT: server requests are independent frames
+            running_mode=RunningMode.IMAGE,  # server requests are independent frames
             max_results=8,
             score_threshold=0.30,
         )
@@ -1600,6 +894,8 @@ def object_gesture(request):
     h, w = frame_bgr.shape[:2]
 
     try:
+        if "mp" not in globals() or mp is None:
+            raise FileNotFoundError("MediaPipe is not installed/configured (missing `mediapipe as mp`).")
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
 
@@ -1610,8 +906,9 @@ def object_gesture(request):
         except Exception:
             ts_ms = int(time.time() * 1000)
 
+        detector = _get_detector()
         with _DETECTOR_LOCK:
-            result = DETECTOR_INSTANCE.detect_for_video(mp_image, ts_ms)
+            result = detector.detect_for_video(mp_image, ts_ms)
 
         objects = to_contract_objects(result, w, h)
 
@@ -1650,24 +947,6 @@ class ApiError:
 
 def _error(code: str, message: str, http: int = 400) -> JsonResponse:
     return JsonResponse({"ok": False, "error": asdict(ApiError(code, message))}, status=http)
-
-
-def _decode_b64_jpeg_to_rgb(b64: str) -> np.ndarray:
-    """
-    Returns RGB uint8 image: HxWx3
-    """
-    if not b64:
-        raise ValueError("Empty base64 image")
-
-    raw = base64.b64decode(b64)
-    arr = np.frombuffer(raw, dtype=np.uint8)
-    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if bgr is None:
-        raise ValueError("Could not decode JPEG")
-
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return rgb
-
 
 def _normalize_handedness(label: str) -> str:
     """
@@ -1720,7 +999,7 @@ def gesture_recognition(request):
         services = get_hand_services()
         gesture_service = services["gesture"]
 
-        img_bgr = _decode_b64_jpeg(image_b64)  # returns BGR np.ndarray
+        img_bgr = decode_b64_jpeg_to_bgr(image_b64)  # returns BGR np.ndarray 
         result = gesture_service.process_bgr(img_bgr)
 
         latency_ms = int((time.time() - t0) * 1000)
@@ -1770,36 +1049,13 @@ def upload_flashcard(request):
 
 @api_view(['POST', 'GET'])
 @csrf_exempt  
-def upload_flashcard(request): 
-    upload_flashcard = request.data
-    for each_item in upload_flashcard:
-        Flashcard.objects.create(**each_item)
-    return Response("successful") 
-
-@api_view(['POST', 'GET'])
-@csrf_exempt  
 def upload_ai_flashcard(request): 
     upload_flashcard = request.data
     for each_item in upload_flashcard:
         AiQuestion.objects.create(**each_item)
     return Response("successful") 
 
-@csrf_exempt
-def ai_flashcard(request):
-    id_ = request.data.get("id", False)
-    user_answer = request.data.get("user_answer", False)
-    if id_ == False:
-        return JsonResponse({"error": "Missing file field 'id'."}, status=400)
-    if user_answer == False:
-        return JsonResponse({"error": "Missing file field 'user_answer'."}, status=400)
-    
-    instantiate_class = NLTK_PROCESSING()
-    result = instantiate_class.main()
-    return JsonResponse({
-        result
-    })
  
-
 @api_view(['GET', 'POST'])
 @csrf_exempt
 def get_ai_questions(request):
@@ -1807,15 +1063,28 @@ def get_ai_questions(request):
     response = AiQuestionSerializers(result, many=True).data
     return Response(response)
  
-@api_view(['GET', 'POST'])
+@api_view(['POST'])
 @csrf_exempt
 def grade_ai_answers(request):
-    id_ = request.data.get('id', False)
-    user_answer = request.data.get('answer', False)
-    official_answer = AiQuestion.objects.get(id=id_).official_answer 
-    instantiate = PROCESSING()
-    ai_grade_check = instantiate.main(user_answer, official_answer)
+    id_ = request.data.get('id')
+    user_answer = request.data.get('answer')
+
+    if not id_:
+        return Response({"detail": "Missing id"}, status=400)
+    if not user_answer:
+        return Response({"detail": "Missing answer"}, status=400)
+
+    try:
+        obj = AiQuestion.objects.get(id=id_)
+    except AiQuestion.DoesNotExist:
+        return Response({"detail": "Invalid id"}, status=404)
+
+    official_answer = obj.official_answer
+
+    grader = Processing()
+    ai_grade_check = grader.grade(user_answer, official_answer)
+
     return Response({
-        "grade_check":ai_grade_check,
-        "answer":official_answer
-        })
+        "grade_check": ai_grade_check,
+        "answer": official_answer
+    })
